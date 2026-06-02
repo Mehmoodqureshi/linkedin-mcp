@@ -29,10 +29,71 @@
  * Strict TypeScript, defensive error handling, idempotent launch/close.
  */
 
+import { execFileSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
+import { existsSync, readlinkSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { chromium, type BrowserContext, type Page } from 'playwright';
+
+/** Chromium singleton lock files written into a persistent profile directory. */
+const SINGLETON_FILES = ['SingletonLock', 'SingletonSocket', 'SingletonCookie'];
+
+/**
+ * Inspect a profile's `SingletonLock` (a `<host>-<pid>` symlink Chromium writes)
+ * to decide whether a LIVE process still owns the profile. Returns `{alive,pid}`.
+ * If the lock is missing/unreadable or the pid can't be parsed, it is treated as
+ * NOT alive (stale) so recovery can proceed. Pid reuse is possible but rare; the
+ * conservative failure is to report "alive" and surface a clear error rather than
+ * corrupt a profile in genuine concurrent use.
+ */
+function inspectProfileLock(profileDir: string): { alive: boolean; pid: number | null } {
+  try {
+    const lockPath = join(profileDir, 'SingletonLock');
+    if (!existsSync(lockPath)) return { alive: false, pid: null };
+    const target = readlinkSync(lockPath); // e.g. "MyHost-12345"
+    const pid = Number.parseInt(target.slice(target.lastIndexOf('-') + 1), 10);
+    if (!Number.isInteger(pid) || pid <= 0) return { alive: false, pid: null };
+    try {
+      process.kill(pid, 0); // throws ESRCH if the process is gone
+      return { alive: true, pid };
+    } catch (e) {
+      // EPERM = process exists but owned by another user (still alive); else dead.
+      return { alive: (e as NodeJS.ErrnoException).code === 'EPERM', pid };
+    }
+  } catch {
+    return { alive: false, pid: null };
+  }
+}
+
+/** Remove Chromium singleton lock files so a fresh launch can claim the profile. */
+function clearProfileLocks(profileDir: string): void {
+  for (const name of SINGLETON_FILES) {
+    try {
+      rmSync(join(profileDir, name), { force: true });
+    } catch {
+      /* best effort — a missing/locked file must never block recovery */
+    }
+  }
+}
+
+/**
+ * Whether `pid` is a Chromium/Chrome-for-Testing process. Used before killing a
+ * lock owner: the profile dir is dedicated to this driver, so a Chromium holding
+ * it is our own orphan and safe to terminate — but we must never kill an
+ * unrelated process that happens to have reused the pid.
+ */
+function isChromiumProcess(pid: number): boolean {
+  try {
+    const out = execFileSync('ps', ['-p', String(pid), '-o', 'command='], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    return /chrom(e|ium)|Chrome for Testing/i.test(out);
+  } catch {
+    return false; // ps failed / no such process — treat as not-ours, don't kill.
+  }
+}
 
 /** The options object accepted by `chromium.launchPersistentContext`. */
 type PersistentContextOptions = Parameters<typeof chromium.launchPersistentContext>[1];
@@ -171,6 +232,62 @@ export class BrowserManager extends EventEmitter {
     }
   }
 
+  /**
+   * Launch the persistent context, recovering from a STALE Chromium profile
+   * lock. Chromium writes a `SingletonLock` symlink (`<host>-<pid>`) into the
+   * profile; if a prior run was killed uncleanly — e.g. the MCP host (Claude
+   * Desktop) SIGKILLed the server on quit/restart, leaving the browser orphaned
+   * — the lock survives and the next launch fails with "Opening in existing
+   * browser session". MCP clients respawn servers routinely, so this is common.
+   * We detect a dead lock owner, remove the singleton files, and retry once. If
+   * the owner is genuinely ALIVE, another instance holds the profile and we
+   * surface an actionable error instead of corrupting it.
+   */
+  private async launchWithLockRecovery(
+    contextOptions: PersistentContextOptions,
+  ): Promise<BrowserContext> {
+    try {
+      return await chromium.launchPersistentContext(this.profileDir, contextOptions);
+    } catch (err) {
+      const message = (err as Error).message ?? '';
+      const isLockError =
+        /already in use|existing browser session|ProcessSingleton|SingletonLock|profile.*in use/i.test(
+          message,
+        );
+      if (!isLockError) throw err;
+
+      const owner = inspectProfileLock(this.profileDir);
+      if (owner.alive && owner.pid !== null) {
+        if (isChromiumProcess(owner.pid)) {
+          // Orphaned browser from a previous run: the MCP host (e.g. Claude
+          // Desktop) SIGKILLed our server but the Chromium child survived and
+          // still holds OUR dedicated profile. Terminate it and reclaim.
+          try {
+            process.kill(owner.pid, 'SIGKILL');
+          } catch {
+            /* already gone between inspect and kill */
+          }
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        } else {
+          // A live, non-Chromium process owns the lock (pid reuse). Don't kill
+          // an unrelated process — surface an actionable error instead.
+          throw new Error(
+            `the profile lock is held by pid ${owner.pid}, which is not our Chromium. ` +
+              `Set a different LINKEDIN_MCP_USERDATA, or clear the lock manually.`,
+          );
+        }
+      }
+
+      // Owner was dead (stale lock) or an orphan we just killed: clear the
+      // singleton files and retry once.
+      clearProfileLocks(this.profileDir);
+      process.stderr.write(
+        '[browser] recovered a held/stale Chromium profile lock; retrying launch.\n',
+      );
+      return await chromium.launchPersistentContext(this.profileDir, contextOptions);
+    }
+  }
+
   private async doLaunch(): Promise<BrowserContext> {
     const contextOptions: PersistentContextOptions = {
       headless: this.headless,
@@ -186,7 +303,7 @@ export class BrowserManager extends EventEmitter {
 
     let context: BrowserContext;
     try {
-      context = await chromium.launchPersistentContext(this.profileDir, contextOptions);
+      context = await this.launchWithLockRecovery(contextOptions);
     } catch (err) {
       throw new Error(
         `Failed to launch persistent Chromium at ${this.profileDir}: ${(err as Error).message}`,
