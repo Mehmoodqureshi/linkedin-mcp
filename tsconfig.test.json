@@ -1,0 +1,23 @@
+{
+  // Type-check ONLY config for the HITL test suite.
+  //
+  // The production tsconfig.json sets rootDir: "src" and includes only
+  // src/**+scripts/**, so `npm run typecheck`/`npm run build` never see (or
+  // emit) the test/ tree. This config exists purely to type-check test/ against
+  // the REAL driver API with the same strict flags, without ever emitting.
+  //
+  // It is never used by `npm run build`. ts-node runs the suite via
+  // tsconfig.json (transpileOnly), so this file does not affect runtime either.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    // test/ pulls in src/, so widen rootDir to the project root.
+    "rootDir": ".",
+    "types": ["node"]
+  },
+  "include": ["test/**/*.ts", "src/**/*.ts", "scripts/**/*.ts"],
+  "exclude": ["node_modules", "dist", "src/renderer"]
+}

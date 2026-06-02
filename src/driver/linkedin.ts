@@ -1,0 +1,287 @@
+/**
+ * LinkedInDriver — the main orchestrator / facade for the automation layer.
+ *
+ * This class composes the low-level pieces (browser, session) with the
+ * high-level action modules (auth, profile, search, messaging, connections,
+ * feed) behind a single, stable surface. The rest of the app (IPC handlers,
+ * MCP tools) only ever talks to a `LinkedInDriver` instance — never directly
+ * to Playwright or to an individual action class.
+ *
+ * Design notes:
+ *   - Configuration is read from `process.env` in the constructor; the driver
+ *     takes no arguments so it can be instantiated as a process-wide singleton.
+ *   - All action classes share a single Playwright `Page` (the "primary page").
+ *     They are constructed against that page; if it ever dies, `getPage()`
+ *     transparently re-creates it so the driver survives a crashed tab without
+ *     a full relaunch.
+ *   - The browser is launched lazily by `launch()`; nothing touches Chromium
+ *     until then, keeping process startup (especially MCP mode) fast.
+ */
+
+import { BrowserManager } from './browser';
+import { SessionManager, getSessionManager } from './session';
+import { AuthActions } from './actions/auth';
+import { ProfileActions } from './actions/profile';
+import { SearchActions } from './actions/search';
+import { MessagingActions } from './actions/messages';
+import { ConnectionActions } from './actions/connections';
+import { FeedActions } from './actions/feed';
+
+import type { Page } from 'playwright';
+import type { DriverState, DriverStatus } from './types';
+
+// ---------------------------------------------------------------------------
+// Config
+// ---------------------------------------------------------------------------
+
+/** Resolved configuration sourced from `process.env`. */
+interface DriverConfig {
+  /** Run Chromium headless. Defaults to false (real LinkedIn flags headless). */
+  headless: boolean;
+  /** LinkedIn account email, if provided via env for auto-login. */
+  email: string | undefined;
+  /** LinkedIn account password, if provided via env for auto-login. */
+  password: string | undefined;
+  /** Absolute path to the persistent Chromium profile directory. */
+  userDataDir: string | undefined;
+}
+
+function readConfig(): DriverConfig {
+  const truthy = (v: string | undefined): boolean =>
+    v === '1' || v?.toLowerCase() === 'true';
+
+  return {
+    headless: truthy(process.env.LINKEDIN_HEADLESS),
+    email: process.env.LINKEDIN_EMAIL,
+    password: process.env.LINKEDIN_PASSWORD,
+    userDataDir: process.env.LINKEDIN_USER_DATA_DIR,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Driver
+// ---------------------------------------------------------------------------
+
+export class LinkedInDriver {
+  /** Owns the Playwright browser/context lifecycle. */
+  public readonly browser: BrowserManager;
+
+  /** Persists, restores and validates the LinkedIn session artifact. */
+  public readonly session: SessionManager;
+
+  // Action modules. These are assigned during `launch()`, once a Page exists.
+  // The definite-assignment assertion is intentional: every accessor is
+  // unusable (guarded by `ensureReady`) until `launch()` has wired them up.
+  public auth!: AuthActions;
+  public profile!: ProfileActions;
+  public search!: SearchActions;
+  public messages!: MessagingActions;
+  public connections!: ConnectionActions;
+  public feed!: FeedActions;
+
+  /** Current lifecycle state. */
+  public status: DriverState = 'idle';
+
+  private readonly config: DriverConfig;
+
+  /** The shared primary page handed to every action class. */
+  private page: Page | null = null;
+
+  /** Cached login flag, refreshed on `launch()` and auth transitions. */
+  private loggedIn = false;
+
+  /** Last cheap session-validity snapshot (no Chromium required to read). */
+  private sessionValid = false;
+
+  constructor() {
+    this.config = readConfig();
+    this.browser = new BrowserManager({
+      headless: this.config.headless,
+      ...(this.config.userDataDir !== undefined
+        ? { userDataDir: this.config.userDataDir }
+        : {}),
+    });
+    // Shared process-wide session manager (single-session model).
+    this.session = getSessionManager();
+  }
+
+  // -------------------------------------------------------------------------
+  // Lifecycle
+  // -------------------------------------------------------------------------
+
+  /**
+   * Launch the browser, create the primary page, wire up every action module,
+   * and attempt to restore a previously persisted session.
+   *
+   * Idempotent: a `launch()` on an already-ready (or in-flight) driver is a
+   * no-op.
+   */
+  async launch(): Promise<void> {
+    if (this.status === 'ready' || this.status === 'launching') return;
+
+    this.status = 'launching';
+    try {
+      // 1. Bring up Chromium + a persistent browser context.
+      await this.browser.launch();
+
+      // 2. Create the single page every action module shares.
+      this.page = await this.browser.newPage();
+      const page = this.page;
+
+      // 3. Instantiate all action classes against that shared page.
+      this.auth = new AuthActions(page);
+      this.profile = new ProfileActions(page);
+      this.search = new SearchActions(page);
+      this.messages = new MessagingActions(page);
+      this.connections = new ConnectionActions(page);
+      this.feed = new FeedActions(page);
+
+      // 4. Best-effort session restore. A failure here is non-fatal: the user
+      //    can still log in interactively, so we don't flip to 'error'.
+      await this.refreshSession();
+
+      this.status = 'ready';
+    } catch (err) {
+      this.status = 'error';
+      throw err;
+    }
+  }
+
+  /**
+   * Persist the current session and tear the browser down.
+   * Idempotent: safe to call when already closed.
+   */
+  async close(): Promise<void> {
+    if (this.status === 'closed') return;
+
+    try {
+      // Save session before the context disappears (best-effort). Only touch
+      // the context if the browser is actually launched, to avoid spinning one
+      // up just to tear it down.
+      if (this.browser.isLaunched()) {
+        const context = await this.browser.getContext();
+        await this.session.save(context);
+      }
+    } catch {
+      // Saving is best-effort; never block shutdown on it.
+    } finally {
+      try {
+        await this.browser.close();
+      } finally {
+        this.page = null;
+        this.loggedIn = false;
+        this.status = 'closed';
+      }
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Page access
+  // -------------------------------------------------------------------------
+
+  /**
+   * Return the shared primary page, lazily (re)creating it if it was never
+   * opened or has since been closed (e.g. a crashed tab). Action modules that
+   * need a guaranteed-live page route through here.
+   */
+  async getPage(): Promise<Page> {
+    this.ensureReady();
+    if (!this.page || this.page.isClosed()) {
+      this.page = await this.browser.newPage();
+    }
+    return this.page;
+  }
+
+  // -------------------------------------------------------------------------
+  // Status
+  // -------------------------------------------------------------------------
+
+  /** Snapshot of the driver's health for IPC / MCP / tray consumers. */
+  getStatus(): DriverStatus {
+    return {
+      status: this.status,
+      isLoggedIn: this.loggedIn,
+      sessionValid: this.sessionValid,
+    };
+  }
+
+  /**
+   * Re-evaluate session validity (cheap, browser-free) and — when a context is
+   * live and a valid session artifact exists — confirm we are actually logged
+   * in. Call after login/logout to keep `getStatus()` accurate.
+   */
+  async refreshSession(): Promise<void> {
+    // Cheap, browser-free heuristic from the saved storageState artifact.
+    try {
+      this.sessionValid = await this.session.hasValidSession();
+    } catch {
+      this.sessionValid = false;
+    }
+
+    // Authoritative check: with a PERSISTENT Chromium profile the live login
+    // state lives in the profile directory, NOT in linkedin-session.json. The
+    // storageState artifact can lag behind the profile (e.g. it was saved before
+    // an interactive login), so we must NOT gate the live check on sessionValid —
+    // doing so made the driver report "not logged in" for a genuinely authed
+    // profile, which in turn made the HITL login gate re-prompt every run.
+    // Whenever the auth module is wired to a live page, trust the live check.
+    if (this.auth) {
+      try {
+        this.loggedIn = await this.auth.isLoggedIn();
+      } catch {
+        this.loggedIn = false;
+      }
+      // A confirmed live session is the strongest signal — don't let a stale
+      // artifact under-report it.
+      if (this.loggedIn) {
+        this.sessionValid = true;
+      }
+    } else {
+      this.loggedIn = false;
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Internals
+  // -------------------------------------------------------------------------
+
+  private ensureReady(): void {
+    if (this.status !== 'ready') {
+      throw new Error(
+        `LinkedInDriver is not ready (status: ${this.status}); call launch() first`,
+      );
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Singleton
+// ---------------------------------------------------------------------------
+
+let instance: LinkedInDriver | null = null;
+
+/**
+ * Return the process-wide `LinkedInDriver` singleton, creating it on first use.
+ *
+ * A single instance is intentional: two LinkedIn sessions racing each other
+ * trips bot-detection, and the persisted profile directory is a shared,
+ * exclusive resource.
+ */
+export function getInstance(): LinkedInDriver {
+  if (!instance) {
+    instance = new LinkedInDriver();
+  }
+  return instance;
+}
+
+/**
+ * Dispose of the current singleton (closing the browser) and drop the
+ * reference so the next `getInstance()` starts fresh. Primarily useful for
+ * tests and clean shutdown.
+ */
+export async function resetInstance(): Promise<void> {
+  if (instance) {
+    await instance.close();
+    instance = null;
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "linkedin-driver": {
+      "command": "/Users/mehmoodqureshi/Work/linkedin-mcp/node_modules/.bin/electron",
+      "args": ["/Users/mehmoodqureshi/Work/linkedin-mcp"],
+      "env": {
+        "LINKEDIN_MCP_STDIO": "1",
+        "LINKEDIN_USER_DATA_DIR": "/Users/mehmoodqureshi/.linkedin-mcp"
+      }
+    }
+  }
+}

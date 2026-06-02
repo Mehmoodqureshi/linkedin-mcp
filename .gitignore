@@ -1,0 +1,54 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build output
+dist/
+release/
+out/
+*.tsbuildinfo
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+
+# Electron userData / session storage (never commit a logged-in session)
+userData/
+pw-profile/
+storageState.json
+**/storageState.json
+
+# HITL harness — real targets (accounts/URLs you control); never commit these.
+# The checked-in template is test/hitl/test-targets.example.json.
+test-targets.json
+
+# Scraped prospect data / generated campaigns — contains third-party PII.
+orbit-campaign.md
+*-campaign.md
+prospects*.json
+
+# Playwright
+test-results/
+playwright-report/
+.local-browsers/
+playwright-browsers/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Local agent / editor config
+.claude/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp

@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'unsafe-inline'; script-src 'self';"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LinkedIn MCP Driver</title>
+    <style>
+      :root {
+        --bg: #1a1a2e;
+        --bg-panel: #21213a;
+        --bg-input: #16213e;
+        --accent: #0077b5;
+        --accent-hover: #0a8cd0;
+        --text: #e6e6f0;
+        --text-dim: #9a9ab0;
+        --border: #303052;
+        --ok: #2ecc71;
+        --warn: #f1c40f;
+        --err: #e74c3c;
+        --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Courier New", monospace;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+      }
+
+      body {
+        background: var(--bg);
+        color: var(--text);
+        font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        font-size: 14px;
+        display: flex;
+        flex-direction: column;
+        min-height: 100vh;
+        padding: 20px;
+        gap: 16px;
+      }
+
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        border-bottom: 1px solid var(--border);
+        padding-bottom: 14px;
+      }
+
+      h1 {
+        font-size: 18px;
+        font-weight: 600;
+        margin: 0;
+        letter-spacing: 0.2px;
+      }
+
+      h1 .brand {
+        color: var(--accent);
+      }
+
+      .status {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+        color: var(--text-dim);
+      }
+
+      .dot {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background: var(--err);
+        box-shadow: 0 0 0 0 rgba(0, 0, 0, 0);
+        transition: background 0.2s ease, box-shadow 0.2s ease;
+      }
+
+      .dot.ready {
+        background: var(--ok);
+        box-shadow: 0 0 8px 1px rgba(46, 204, 113, 0.5);
+      }
+
+      .dot.launching {
+        background: var(--warn);
+        box-shadow: 0 0 8px 1px rgba(241, 196, 15, 0.5);
+        animation: pulse 1.1s ease-in-out infinite;
+      }
+
+      .dot.error {
+        background: var(--err);
+        box-shadow: 0 0 8px 1px rgba(231, 76, 60, 0.5);
+      }
+
+      @keyframes pulse {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.35;
+        }
+      }
+
+      .panel {
+        background: var(--bg-panel);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 16px;
+      }
+
+      .panel h2 {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--text-dim);
+        margin: 0 0 12px;
+        font-weight: 600;
+      }
+
+      .controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      button {
+        background: var(--accent);
+        color: #fff;
+        border: none;
+        border-radius: 6px;
+        padding: 9px 16px;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: background 0.15s ease, opacity 0.15s ease;
+      }
+
+      button:hover:not(:disabled) {
+        background: var(--accent-hover);
+      }
+
+      button.secondary {
+        background: transparent;
+        border: 1px solid var(--border);
+        color: var(--text);
+      }
+
+      button.secondary:hover:not(:disabled) {
+        background: var(--bg-input);
+      }
+
+      button:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+      }
+
+      form#login-form {
+        display: grid;
+        gap: 10px;
+        max-width: 360px;
+      }
+
+      label {
+        display: block;
+        font-size: 12px;
+        color: var(--text-dim);
+        margin-bottom: 4px;
+      }
+
+      input {
+        width: 100%;
+        background: var(--bg-input);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        color: var(--text);
+        padding: 9px 11px;
+        font-size: 13px;
+        outline: none;
+        transition: border-color 0.15s ease;
+      }
+
+      input:focus {
+        border-color: var(--accent);
+      }
+
+      .hidden {
+        display: none !important;
+      }
+
+      .session-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+        gap: 12px;
+      }
+
+      .session-item {
+        background: var(--bg-input);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 10px 12px;
+      }
+
+      .session-item .k {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--text-dim);
+      }
+
+      .session-item .v {
+        font-size: 15px;
+        font-weight: 600;
+        margin-top: 4px;
+        font-family: var(--mono);
+      }
+
+      .v.good {
+        color: var(--ok);
+      }
+      .v.bad {
+        color: var(--err);
+      }
+
+      .console-panel {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        min-height: 200px;
+      }
+
+      .console-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      #log {
+        flex: 1;
+        background: #0e0e1c;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 12px;
+        margin: 0;
+        overflow-y: auto;
+        font-family: var(--mono);
+        font-size: 12px;
+        line-height: 1.55;
+        white-space: pre-wrap;
+        word-break: break-word;
+        min-height: 160px;
+        max-height: 40vh;
+      }
+
+      .log-line {
+        display: block;
+      }
+      .log-ts {
+        color: var(--text-dim);
+      }
+      .log-line.info .log-msg {
+        color: var(--text);
+      }
+      .log-line.success .log-msg {
+        color: var(--ok);
+      }
+      .log-line.warn .log-msg {
+        color: var(--warn);
+      }
+      .log-line.error .log-msg {
+        color: var(--err);
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1><span class="brand">LinkedIn</span> MCP Driver</h1>
+      <div class="status">
+        <span id="status-dot" class="dot error" aria-hidden="true"></span>
+        <span id="status-text">disconnected</span>
+      </div>
+    </header>
+
+    <section class="panel">
+      <h2>Driver Control</h2>
+      <div class="controls">
+        <button id="btn-start">Start Driver</button>
+        <button id="btn-stop" class="secondary">Stop Driver</button>
+        <button id="btn-logout" class="secondary">Logout</button>
+      </div>
+    </section>
+
+    <section class="panel" id="login-panel">
+      <h2>Sign In</h2>
+      <form id="login-form" autocomplete="off">
+        <div>
+          <label for="email">Email</label>
+          <input id="email" name="email" type="email" placeholder="you@example.com" required />
+        </div>
+        <div>
+          <label for="password">Password</label>
+          <input id="password" name="password" type="password" placeholder="••••••••" required />
+        </div>
+        <button id="btn-login" type="submit">Login</button>
+      </form>
+    </section>
+
+    <section class="panel">
+      <h2>Session</h2>
+      <div class="session-grid">
+        <div class="session-item">
+          <div class="k">Driver</div>
+          <div class="v" id="info-state">—</div>
+        </div>
+        <div class="session-item">
+          <div class="k">Session</div>
+          <div class="v" id="info-session">—</div>
+        </div>
+        <div class="session-item">
+          <div class="k">MCP Clients</div>
+          <div class="v" id="info-clients">—</div>
+        </div>
+        <div class="session-item">
+          <div class="k">Transport</div>
+          <div class="v" id="info-transport">—</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel console-panel">
+      <div class="console-head">
+        <h2>Activity Log</h2>
+        <button id="btn-clear" class="secondary" type="button">Clear</button>
+      </div>
+      <pre id="log" aria-live="polite"></pre>
+    </section>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

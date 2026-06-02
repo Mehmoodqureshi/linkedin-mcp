@@ -1,0 +1,70 @@
+{
+  "name": "@mehmoodqureshi/linkedin-mcp",
+  "version": "0.1.0",
+  "description": "Drive LinkedIn via Playwright and expose it as an MCP server over stdio. Runs standalone (npx) or as an Electron tray app.",
+  "author": "Mehmood Ur Rehman Qureshi",
+  "license": "MIT",
+  "main": "dist/main/index.js",
+  "bin": {
+    "linkedin-mcp": "dist/cli.js"
+  },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.d.ts",
+    "scripts/postinstall.js",
+    "resources",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "linkedin",
+    "playwright",
+    "automation",
+    "claude"
+  ],
+  "scripts": {
+    "start": "electron .",
+    "mcp": "node dist/cli.js",
+    "build": "tsc -p tsconfig.json && npm run build:renderer",
+    "build:renderer": "tsc -p tsconfig.renderer.json && npm run copy:renderer",
+    "copy:renderer": "node -e \"const fs=require('fs');fs.mkdirSync('dist/renderer',{recursive:true});fs.copyFileSync('src/renderer/index.html','dist/renderer/index.html')\"",
+    "build:watch": "tsc -p tsconfig.json --watch",
+    "dev": "ts-node --project tsconfig.json src/main/index.ts",
+    "clean": "rimraf dist",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck:test": "tsc -p tsconfig.test.json",
+    "register-mcp": "ts-node --project tsconfig.json scripts/register-mcp.ts",
+    "test:hitl": "ts-node --project tsconfig.json test/hitl/index.ts",
+    "test:hitl:all": "ts-node --project tsconfig.json test/hitl/index.ts --include-mutating",
+    "pack": "npm run build && electron-builder --dir",
+    "dist": "npm run build && electron-builder",
+    "dist:mac": "npm run build && electron-builder --mac",
+    "dist:win": "npm run build && electron-builder --win",
+    "dist:linux": "npm run build && electron-builder --linux",
+    "prepublishOnly": "npm run clean && npm run build",
+    "postinstall": "node scripts/postinstall.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "playwright": "^1.49.1",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.10",
+    "electron": "^28.3.3",
+    "electron-builder": "^24.13.3",
+    "rimraf": "^5.0.10",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.2"
+  },
+  "build": {
+    "extends": "./electron-builder.json"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

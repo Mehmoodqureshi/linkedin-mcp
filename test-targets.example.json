@@ -1,0 +1,44 @@
+{
+  "_README": {
+    "_about": "Copy this file to test-targets.json at the PROJECT ROOT (it is gitignored) and fill in real targets. The HITL harness reads ONLY this file for every account/URL/query it is allowed to touch. Mutating actions may use ONLY the dedicated mutation keys below — never search results or synthesized values. Delete this _README block in your real file, or leave it (the loader ignores unknown keys).",
+    "profileUrls": "string[] — full https://www.linkedin.com/in/<slug>/ URLs viewed via profile.getProfile (READ-ONLY).",
+    "profileUsernames": "string[] — bare vanity slugs (e.g. 'satyanadella') for profile.getProfileByUsername (READ-ONLY).",
+    "peopleQuery": "string — query for search.searchPeople (READ-ONLY).",
+    "jobsQuery": "string — query for search.searchJobs (READ-ONLY).",
+    "companiesQuery": "string — query for search.searchCompanies (READ-ONLY).",
+    "conversationId": "string (optional) — existing conversation id for messages.getMessages (READ-ONLY); empty -> that step is skipped.",
+    "messageTarget": "{ profileUrl, body } — MUTATING messages.sendMessage target. Use a safe 1st-degree / open-profile test account YOU control, plus the exact message text. Only fires with --include-mutating + a typed 'yes'.",
+    "connectionTarget": "{ profileUrl, note? } — MUTATING connections.sendConnectionRequest target + optional invite note (<=300 chars).",
+    "acceptRequestProfileId": "string (optional) — MUTATING connections.acceptConnectionRequest target (a pending INBOUND invite you arranged).",
+    "withdrawTarget": "{ profileId?, profileUrl? } (optional) — MUTATING connections.withdrawConnectionRequest target (a pending OUTBOUND invite).",
+    "likePostUrl": "string — MUTATING feed.likePost permalink (a safe post, ideally your own).",
+    "allowLogout": "boolean (optional, default false) — extra guard so auth.logout (MUTATING) only runs when BOTH this AND --include-mutating are set."
+  },
+
+  "profileUrls": [
+    "https://www.linkedin.com/in/some-public-profile/"
+  ],
+  "profileUsernames": [
+    "some-public-profile"
+  ],
+  "peopleQuery": "software engineer san francisco",
+  "jobsQuery": "typescript backend remote",
+  "companiesQuery": "anthropic",
+  "conversationId": "",
+
+  "messageTarget": {
+    "profileUrl": "https://www.linkedin.com/in/your-test-account/",
+    "body": "Hi — this is an automated HITL test message, please ignore."
+  },
+  "connectionTarget": {
+    "profileUrl": "https://www.linkedin.com/in/your-test-account/",
+    "note": "Connecting for an automated HITL test — feel free to ignore."
+  },
+  "acceptRequestProfileId": "",
+  "withdrawTarget": {
+    "profileId": "",
+    "profileUrl": ""
+  },
+  "likePostUrl": "https://www.linkedin.com/feed/update/urn:li:activity:0000000000000000000/",
+  "allowLogout": false
+}
