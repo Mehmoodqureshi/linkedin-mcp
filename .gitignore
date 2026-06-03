@@ -9,6 +9,13 @@ release/
 out/
 *.tsbuildinfo
 
+# Generated icons (produced by `npm run gen-icon`, runs automatically before packaging)
+assets/icon.iconset/
+assets/icon.icns
+assets/icon.png
+assets/icon.ico
+resources/tray-icon.png
+
 # Environment / secrets
 .env
 .env.local

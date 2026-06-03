@@ -165,6 +165,40 @@ function resolveUserDataDir(): string {
   );
 }
 
+/**
+ * Point Playwright at the Chromium we bundle into the app.
+ *
+ * `electron-builder` copies `node_modules/playwright-core/.local-browsers` to
+ * `Resources/playwright-browsers` (see electron-builder.json `extraResources`).
+ * A packaged app cannot reach the developer's `~/…/ms-playwright` cache, so we
+ * set `PLAYWRIGHT_BROWSERS_PATH` to the bundled copy BEFORE the first launch —
+ * Playwright reads this env var when it resolves the executable. Runs once and
+ * only inside a packaged Electron build; the npx/dev paths keep using the cache
+ * the postinstall populated, and any pre-set env var wins.
+ */
+let bundledBrowsersResolved = false;
+function useBundledBrowsersIfPackaged(): void {
+  if (bundledBrowsersResolved) return;
+  bundledBrowsersResolved = true;
+  if (process.env.PLAYWRIGHT_BROWSERS_PATH) return; // explicit override wins
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires, global-require
+    const electron = require('electron') as typeof import('electron');
+    if (!electron.app?.isPackaged) return;
+    const bundled = join(process.resourcesPath, 'playwright-browsers');
+    if (existsSync(bundled)) {
+      process.env.PLAYWRIGHT_BROWSERS_PATH = bundled;
+    } else {
+      process.stderr.write(
+        `[browser] packaged app but bundled browsers missing at ${bundled}; ` +
+          `falling back to the default Playwright cache.\n`,
+      );
+    }
+  } catch {
+    // Not in Electron — nothing to resolve.
+  }
+}
+
 // ---------------------------------------------------------------------------
 // BrowserManager
 // ---------------------------------------------------------------------------
@@ -289,6 +323,9 @@ export class BrowserManager extends EventEmitter {
   }
 
   private async doLaunch(): Promise<BrowserContext> {
+    // Resolve the bundled Chromium location before Playwright reads it.
+    useBundledBrowsersIfPackaged();
+
     const contextOptions: PersistentContextOptions = {
       headless: this.headless,
       slowMo: this.slowMo,
