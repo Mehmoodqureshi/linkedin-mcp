@@ -39,12 +39,33 @@ let mainWindow: BrowserWindow | null = null;
 /** The system tray icon. Kept at module scope so it is not garbage collected. */
 let tray: Tray | null = null;
 
+/**
+ * Whether stdio is wired to a pipe/socket — how an MCP client (Claude Desktop)
+ * spawns a child, versus a GUI launch (Finder/dock) where stdin is /dev/null
+ * and a terminal launch where it is a TTY. We must NOT treat "no TTY" alone as
+ * MCP mode: a double-clicked .app has no TTY yet is a normal UI launch, and
+ * treating it as MCP would bind the (empty) stdin, hit EOF, and quit instantly.
+ */
+function stdioIsPipe(): boolean {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires, global-require
+  const { fstatSync } = require('node:fs') as typeof import('node:fs');
+  for (const fd of [0, 1]) {
+    try {
+      const st = fstatSync(fd);
+      if (st.isFIFO() || st.isSocket()) return true;
+    } catch {
+      /* fd may be closed/unavailable — ignore */
+    }
+  }
+  return false;
+}
+
 /** True when launched as an MCP command (stdio is owned by the MCP server). */
 const isMcpMode =
   process.argv.includes('--mcp') ||
   process.env.LINKEDIN_MCP_STDIO === '1' ||
-  // Claude Desktop spawns the binary with stdio piped (not a TTY).
-  (!process.stdout.isTTY && process.env.LINKEDIN_MCP_AUTODETECT !== '0');
+  // Autodetect: an MCP client pipes stdio. A GUI/terminal launch does not.
+  (process.env.LINKEDIN_MCP_AUTODETECT !== '0' && stdioIsPipe());
 
 const isDev = !app.isPackaged;
 
