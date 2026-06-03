@@ -327,13 +327,18 @@ export class FeedActions {
     assertAuthenticated(this.page);
     await rateLimitDelay();
 
-    const trigger = this.page
-      .locator(
-        'button[aria-label="React Like"], ' +
-          'button[aria-label="Like"], ' +
-          'button.react-button__trigger[aria-label*="Like" i]',
-      )
-      .first();
+    const label = REACTION_LABELS[reaction];
+
+    // The post's primary reaction button, in ANY state — unreacted ("Like" /
+    // "React Like") or already reacted ("Unreact <Reaction>", aria-pressed=true,
+    // verified by DOM probe). Exclude comment-scoped reaction controls, whose
+    // accessible name is "React Like to <name>'s comment".
+    const triggerSel =
+      'button[aria-label="Like"]:not([aria-label*="comment" i]), ' +
+      'button[aria-label="React Like"]:not([aria-label*="comment" i]), ' +
+      'button[aria-label^="React "]:not([aria-label*="comment" i]), ' +
+      'button[aria-label^="Unreact "]:not([aria-label*="comment" i])';
+    const trigger = this.page.locator(triggerSel).first();
 
     if ((await trigger.count()) === 0) {
       return {
@@ -344,58 +349,71 @@ export class FeedActions {
       };
     }
 
-    // Already reacted? The trigger reflects active state via aria-pressed.
-    const pressed = await trigger.getAttribute('aria-pressed').catch(() => null);
-    if (pressed === 'true') {
+    // Already reacted? The button reads "Unreact <Reaction>" / aria-pressed=true.
+    // (The old code only matched a "Like"-labelled trigger, so an already-reacted
+    // post wrongly reported "unavailable".)
+    const curLabel = (await trigger.getAttribute('aria-label').catch(() => '')) ?? '';
+    const curPressed = await trigger.getAttribute('aria-pressed').catch(() => null);
+    if (/^unreact/i.test(curLabel) || curPressed === 'true') {
+      const existing = curLabel.replace(/^unreact\s+/i, '').trim() || 'a reaction';
       return {
         success: true,
         reaction,
         outcome: 'already_reacted',
-        message: 'Post already carries this member’s reaction.',
+        message: new RegExp(`unreact\\s+${label}\\b`, 'i').test(curLabel)
+          ? `Post already carries the ${label} reaction.`
+          : `Post already carries a different reaction (${existing}); left unchanged.`,
       };
     }
 
     await rateLimitDelay();
 
-    // The default reaction is a direct click on the trigger.
+    // Apply: 'like' is a direct click; the others live behind the hover flyout.
     if (reaction === 'like') {
-      await trigger.click();
-      await sleep(800);
-      return {
-        success: true,
-        reaction,
-        outcome: 'reacted',
-        message: 'Reacted with Like.',
-      };
+      await trigger.click().catch(() => undefined);
+    } else {
+      await trigger.hover().catch(() => undefined);
+      await sleep(900); // let the reactions picker animate in
+      const pick = this.page
+        .locator(
+          `button[aria-label="React ${label}"], ` +
+            `button[aria-label="${label}"]:not([aria-label*="comment" i]), ` +
+            `div[role="menu"] button[aria-label*="${label}" i]`,
+        )
+        .first();
+      if (
+        (await pick.count()) === 0 ||
+        !(await pick.isVisible().catch(() => false))
+      ) {
+        return {
+          success: false,
+          reaction,
+          outcome: 'unavailable',
+          message: `The "${reaction}" reaction picker did not open for this post.`,
+        };
+      }
+      await pick.click().catch(() => undefined);
     }
+    await sleep(1300);
 
-    // Non-Like reactions: hover the trigger to reveal the flyout, then pick.
-    await trigger.hover().catch(() => undefined);
-    await sleep(900); // let the reactions picker animate in
-
-    const label = REACTION_LABELS[reaction];
-    const pick = this.page
-      .locator(
-        `button[aria-label="React ${label}"], ` +
-          `button[aria-label="${label}"], ` +
-          `div[role="menu"] button[aria-label*="${label}" i]`,
-      )
-      .first();
-
-    if (
-      (await pick.count()) === 0 ||
-      !(await pick.isVisible().catch(() => false))
-    ) {
+    // VERIFY the reaction actually applied: the post's button must now read
+    // "Unreact <label>". Re-locate (its label just changed) and confirm —
+    // otherwise report failure rather than the previous unconditional success.
+    const afterLabel =
+      (await this.page
+        .locator('button[aria-label^="Unreact "]:not([aria-label*="comment" i])')
+        .first()
+        .getAttribute('aria-label')
+        .catch(() => '')) ?? '';
+    if (!new RegExp(`unreact\\s+${label}\\b`, 'i').test(afterLabel)) {
       return {
         success: false,
         reaction,
         outcome: 'unavailable',
-        message: `The "${reaction}" reaction picker did not open for this post.`,
+        message: `Reaction did not register (control shows "${afterLabel || 'unknown'}").`,
       };
     }
 
-    await pick.click();
-    await sleep(800);
     return {
       success: true,
       reaction,
