@@ -126,17 +126,26 @@ export class LinkedInDriver {
 
       // 2. Create the single page every action module shares.
       this.page = await this.browser.newPage();
-      const page = this.page;
 
-      // 3. Instantiate all action classes against that shared page.
-      this.auth = new AuthActions(page);
-      this.profile = new ProfileActions(page);
-      this.search = new SearchActions(page);
-      this.messages = new MessagingActions(page);
-      this.connections = new ConnectionActions(page);
-      this.feed = new FeedActions(page);
+      // 3. Bind all action classes to that shared page.
+      this.wireActions(this.page);
 
-      // 4. Best-effort session restore. A failure here is non-fatal: the user
+      // 4. If the browser dies out from under us (crash, the user closes the
+      //    Chromium window, an OS kill), drop back to 'idle' so the NEXT call
+      //    relaunches and re-wires the action modules against a fresh page.
+      //    Without this the driver stays falsely 'ready' while every action
+      //    module is pinned to a dead page, so every subsequent tool call fails
+      //    with "Target page, context or browser has been closed" until the
+      //    whole server is restarted.
+      this.browser.once('closed', () => {
+        if (this.status === 'ready') {
+          this.status = 'idle';
+          this.page = null;
+          this.loggedIn = false;
+        }
+      });
+
+      // 5. Best-effort session restore. A failure here is non-fatal: the user
       //    can still log in interactively, so we don't flip to 'error'.
       await this.refreshSession();
 
@@ -144,6 +153,40 @@ export class LinkedInDriver {
     } catch (err) {
       this.status = 'error';
       throw err;
+    }
+  }
+
+  /** (Re)bind every action module to the given primary page. */
+  private wireActions(page: Page): void {
+    this.auth = new AuthActions(page);
+    this.profile = new ProfileActions(page);
+    this.search = new SearchActions(page);
+    this.messages = new MessagingActions(page);
+    this.connections = new ConnectionActions(page);
+    this.feed = new FeedActions(page);
+  }
+
+  /**
+   * Make the driver operational right before an action runs. Two recovery paths:
+   *
+   *   1. The browser crashed / was closed → status is no longer 'ready' → a full
+   *      `launch()` brings Chromium back and re-wires the action modules.
+   *   2. The context is alive but the primary tab died → rebuild the page and
+   *      re-wire the action modules so they never operate on a stale, closed
+   *      page (the action classes capture the page by reference at construction,
+   *      so a fresh page MUST be threaded back into them).
+   *
+   * Tool handlers call this so a mid-session disconnect self-heals on the next
+   * request instead of wedging the server.
+   */
+  async ensureOperational(): Promise<void> {
+    if (this.status !== 'ready') {
+      await this.launch();
+      return;
+    }
+    if (!this.page || this.page.isClosed()) {
+      this.page = await this.browser.getPage();
+      this.wireActions(this.page);
     }
   }
 

@@ -24,7 +24,8 @@ cp test/hitl/test-targets.example.json test-targets.json
 
 Fill in the keys for the suites you plan to run. Read-only keys feed the read
 suites; the **mutation keys** (`messageTarget`, `connectionTarget`,
-`acceptRequestProfileId`, `withdrawTarget`, `likePostUrl`, `allowLogout`) are the
+`acceptRequestProfileId`, `withdrawTarget`, `likePostUrl`, `reactTarget`,
+`commentTarget`, `allowLogout`) are the
 **only** values a mutating action is ever allowed to touch — use safe test
 accounts / posts **you control**. Every key is documented inline in the
 `_README` block of `test-targets.example.json`.

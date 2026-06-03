@@ -12,6 +12,8 @@
     "acceptRequestProfileId": "string (optional) — MUTATING connections.acceptConnectionRequest target (a pending INBOUND invite you arranged).",
     "withdrawTarget": "{ profileId?, profileUrl? } (optional) — MUTATING connections.withdrawConnectionRequest target (a pending OUTBOUND invite).",
     "likePostUrl": "string — MUTATING feed.likePost permalink (a safe post, ideally your own).",
+    "reactTarget": "{ postUrl, reaction? } (optional) — MUTATING feed.reactToPost target. reaction is one of like|celebrate|support|love|insightful|funny (defaults to 'like'); use a NON-'like' value to exercise the reactions-flyout path. Use a safe post, ideally your own.",
+    "commentTarget": "{ postUrl, text } (optional) — MUTATING feed.commentOnPost target + exact comment body. Use a safe post, ideally your own.",
     "allowLogout": "boolean (optional, default false) — extra guard so auth.logout (MUTATING) only runs when BOTH this AND --include-mutating are set."
   },
 
@@ -40,5 +42,13 @@
     "profileUrl": ""
   },
   "likePostUrl": "https://www.linkedin.com/feed/update/urn:li:activity:0000000000000000000/",
+  "reactTarget": {
+    "postUrl": "https://www.linkedin.com/feed/update/urn:li:activity:0000000000000000000/",
+    "reaction": "celebrate"
+  },
+  "commentTarget": {
+    "postUrl": "https://www.linkedin.com/feed/update/urn:li:activity:0000000000000000000/",
+    "text": "Automated HITL test comment — please ignore."
+  },
   "allowLogout": false
 }

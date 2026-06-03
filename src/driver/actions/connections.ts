@@ -15,6 +15,7 @@ import {
   assertAuthenticated,
   clean,
   navigate,
+  normalizeProfileUrl,
   rateLimitDelay,
   sleep,
 } from './common';
@@ -72,7 +73,7 @@ export class ConnectionActions {
     profileUrl: string,
     note?: string,
   ): Promise<ConnectionRequestResult> {
-    const url = profileUrl.startsWith('http') ? profileUrl : `${LINKEDIN_BASE}${profileUrl}`;
+    const url = normalizeProfileUrl(profileUrl);
     await navigate(this.page, url);
     assertAuthenticated(this.page);
     await rateLimitDelay();

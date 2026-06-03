@@ -20,6 +20,18 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
+import type { ReactionType } from '../../src/driver/actions/feed';
+
+/** The reaction verbs feed.reactToPost accepts, used to validate reactTarget. */
+const REACTION_TYPES: readonly ReactionType[] = [
+  'like',
+  'celebrate',
+  'support',
+  'love',
+  'insightful',
+  'funny',
+];
+
 export interface MessageTarget {
   /** Profile URL of a safe 1st-degree / open-profile test account you control. */
   profileUrl: string;
@@ -39,6 +51,20 @@ export interface WithdrawTarget {
   profileId?: string;
   /** ...or by profileUrl. */
   profileUrl?: string;
+}
+
+export interface ReactTarget {
+  /** Post permalink to react to. */
+  postUrl: string;
+  /** Which reaction to apply; defaults to 'like' when omitted. */
+  reaction?: ReactionType;
+}
+
+export interface CommentTarget {
+  /** Post permalink to comment on. */
+  postUrl: string;
+  /** Exact comment body to post. */
+  text: string;
 }
 
 export interface Targets {
@@ -64,6 +90,10 @@ export interface Targets {
   withdrawTarget?: WithdrawTarget;
   /** MUTATING feed.likePost permalink (a safe post, ideally your own). */
   likePostUrl: string;
+  /** MUTATING feed.reactToPost target — permalink + optional reaction. */
+  reactTarget?: ReactTarget;
+  /** MUTATING feed.commentOnPost target — permalink + comment body. */
+  commentTarget?: CommentTarget;
   /** Extra guard: auth.logout only runs when this AND --include-mutating are set. */
   allowLogout?: boolean;
 }
@@ -157,6 +187,12 @@ function normalize(obj: Record<string, unknown>): Targets {
   const withdrawTarget = asWithdrawTarget(obj.withdrawTarget);
   if (withdrawTarget !== undefined) targets.withdrawTarget = withdrawTarget;
 
+  const reactTarget = asReactTarget(obj.reactTarget);
+  if (reactTarget !== undefined) targets.reactTarget = reactTarget;
+
+  const commentTarget = asCommentTarget(obj.commentTarget);
+  if (commentTarget !== undefined) targets.commentTarget = commentTarget;
+
   if (typeof obj.allowLogout === 'boolean') targets.allowLogout = obj.allowLogout;
 
   return targets;
@@ -205,6 +241,32 @@ function asWithdrawTarget(v: unknown): WithdrawTarget | undefined {
   if (profileId !== undefined) target.profileId = profileId;
   if (profileUrl !== undefined) target.profileUrl = profileUrl;
   return target;
+}
+
+function asReactTarget(v: unknown): ReactTarget | undefined {
+  if (typeof v !== 'object' || v === null) return undefined;
+  const o = v as Record<string, unknown>;
+  const postUrl = asString(o.postUrl);
+  if (postUrl.length === 0) return undefined;
+  const target: ReactTarget = { postUrl };
+  // Accept a reaction only when it's one of the known verbs; an unknown or
+  // absent value leaves it undefined so the scenario defaults to 'like'.
+  if (
+    typeof o.reaction === 'string' &&
+    (REACTION_TYPES as readonly string[]).includes(o.reaction)
+  ) {
+    target.reaction = o.reaction as ReactionType;
+  }
+  return target;
+}
+
+function asCommentTarget(v: unknown): CommentTarget | undefined {
+  if (typeof v !== 'object' || v === null) return undefined;
+  const o = v as Record<string, unknown>;
+  const postUrl = asString(o.postUrl);
+  const text = asString(o.text);
+  if (postUrl.length === 0 && text.length === 0) return undefined;
+  return { postUrl, text };
 }
 
 /**

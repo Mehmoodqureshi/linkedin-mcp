@@ -9,6 +9,7 @@
 
 import type { Page } from 'playwright';
 import type { LinkedInDriver } from '../../src/driver/linkedin';
+import type { ReactionType } from '../../src/driver/actions/feed';
 
 // ---------------------------------------------------------------------------
 // Verdicts & step classification
@@ -61,6 +62,19 @@ export interface WithdrawTarget {
   profileUrl?: string;
 }
 
+/** MUTATING feed.reactToPost target — a safe post permalink + reaction. */
+export interface ReactTarget {
+  postUrl: string;
+  /** Which reaction to apply; defaults to 'like' when omitted. */
+  reaction?: ReactionType;
+}
+
+/** MUTATING feed.commentOnPost target — a safe post permalink + body. */
+export interface CommentTarget {
+  postUrl: string;
+  text: string;
+}
+
 /**
  * The validated contents of `test/hitl/test-targets.json`. Read-only keys feed
  * read scenarios; the mutation-target keys are the ONLY values a mutating step
@@ -78,6 +92,8 @@ export interface TestTargets {
   acceptRequestProfileId?: string;
   withdrawTarget?: WithdrawTarget;
   likePostUrl: string;
+  reactTarget?: ReactTarget;
+  commentTarget?: CommentTarget;
   allowLogout?: boolean;
 }
 

@@ -38,6 +38,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 
 import { getInstance, type LinkedInDriver } from '../driver/linkedin';
+import type { ReactionType } from '../driver/actions';
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -314,6 +315,139 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
   {
+    name: 'linkedin_get_invitations',
+    description:
+      'List pending RECEIVED connection invitations from the invitation ' +
+      'manager. Returns each inviter’s name, headline, profile URL, and ' +
+      'profileId (vanity slug). The slug feeds linkedin_accept_invitation.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'linkedin_accept_invitation',
+    description:
+      'Accept a pending RECEIVED connection invitation, identified by the ' +
+      'inviter’s profileId (vanity slug, as returned by ' +
+      'linkedin_get_invitations) or their full profile URL. Fails with a clear ' +
+      'error if no matching pending invitation is found.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        profileId: {
+          type: 'string',
+          description:
+            'Inviter vanity slug (e.g. "john-doe") or full /in/ profile URL.',
+        },
+      },
+      required: ['profileId'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'linkedin_withdraw_invitation',
+    description:
+      'Withdraw a pending SENT connection invitation, identified by the ' +
+      'recipient’s profileId (vanity slug) or their full profile URL. Fails ' +
+      'with a clear error if no matching sent invitation is found.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        profileId: {
+          type: 'string',
+          description:
+            'Recipient vanity slug (e.g. "john-doe") or full /in/ profile URL.',
+        },
+      },
+      required: ['profileId'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'linkedin_react',
+    description:
+      'React to a post by its permalink URL with one of LinkedIn’s six ' +
+      'reactions (like, celebrate, support, love, insightful, funny). Defaults ' +
+      'to "like". Subject to rate limits; no-ops cleanly if the post already ' +
+      'carries your reaction, and reports "unavailable" if no reaction control ' +
+      'is present.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        postUrl: {
+          type: 'string',
+          description:
+            'Post permalink, e.g. ' +
+            'https://www.linkedin.com/feed/update/urn:li:activity:1234567890/ ' +
+            '(as returned in a feed post’s postUrl).',
+        },
+        reaction: {
+          type: 'string',
+          description: 'Which reaction to apply. Defaults to "like".',
+          enum: ['like', 'celebrate', 'support', 'love', 'insightful', 'funny'],
+          default: 'like',
+        },
+      },
+      required: ['postUrl'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'linkedin_comment',
+    description:
+      'Post a comment on a post by its permalink URL. Returns delivery status; ' +
+      'fails with a clear error if the post is not commentable or the comment ' +
+      'composer cannot be opened.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        postUrl: {
+          type: 'string',
+          description:
+            'Post permalink, e.g. ' +
+            'https://www.linkedin.com/feed/update/urn:li:activity:1234567890/ ' +
+            '(as returned in a feed post’s postUrl).',
+        },
+        text: {
+          type: 'string',
+          description: 'Comment body text.',
+          minLength: 1,
+          maxLength: 1250,
+        },
+      },
+      required: ['postUrl', 'text'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'linkedin_get_member_posts',
+    description:
+      'List a member’s recent posts (newest first) with their canonical ' +
+      'permalink URLs and a short text preview, by reading their recent-activity ' +
+      'page. Use this to locate a specific person’s post (e.g. to react or ' +
+      'comment) without waiting for it to appear in the volatile home feed.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        profileUrl: {
+          type: 'string',
+          description: 'Target member profile URL or /in/ slug.',
+        },
+        limit: {
+          type: 'integer',
+          description: 'Number of recent posts to collect.',
+          minimum: 1,
+          maximum: 20,
+          default: 5,
+        },
+      },
+      required: ['profileUrl'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'linkedin_get_feed',
     description:
       'Read the home feed and return normalized posts (author, author URL, ' +
@@ -418,6 +552,46 @@ function optionalInt(
   return v;
 }
 
+/** The accepted reaction verbs for `linkedin_react`, in catalog order. */
+const REACTION_TYPES = [
+  'like',
+  'celebrate',
+  'support',
+  'love',
+  'insightful',
+  'funny',
+] as const satisfies readonly ReactionType[];
+
+/**
+ * Read an optional string argument constrained to a fixed set (undefined if
+ * absent). Throws when present but not one of the allowed values.
+ */
+function optionalEnum<T extends string>(
+  args: Args,
+  key: string,
+  allowed: readonly T[],
+): T | undefined {
+  const v = optionalString(args, key);
+  if (v === undefined) return undefined;
+  if (!allowed.includes(v as T)) {
+    throw new McpToolError(
+      `Argument "${key}" must be one of: ${allowed.join(', ')}.`,
+    );
+  }
+  return v as T;
+}
+
+/**
+ * Normalize a profile reference to its vanity slug. Accepts either a bare slug
+ * ("john-doe") or a full /in/ profile URL and returns the slug the connection
+ * actions match on, so callers can pass whichever they have to hand. Falls back
+ * to the trimmed input when no /in/ segment is present.
+ */
+function profileSlug(ref: string): string {
+  const m = ref.match(/\/in\/([^/?#]+)/);
+  return (m?.[1] ?? ref).trim();
+}
+
 /** Read an optional object argument (undefined if absent). */
 function optionalObject(args: Args, key: string): Args | undefined {
   const v = args[key];
@@ -442,17 +616,18 @@ function optionalObject(args: Args, key: string): Args | undefined {
 async function withReadyDriver(): Promise<LinkedInDriver> {
   const driver = getInstance();
 
-  // Lazily bring up Chromium. `launch()` is idempotent and a no-op once ready.
-  if (driver.status !== 'ready') {
-    try {
-      await driver.launch();
-    } catch (err) {
-      throw new McpToolError(
-        `Failed to launch the LinkedIn driver: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      );
-    }
+  // Lazily bring up Chromium AND self-heal a mid-session disconnect: if the
+  // browser died (crash / closed window) or the primary tab was lost, this
+  // relaunches and re-wires the action modules to a live page. Idempotent and a
+  // no-op once ready with a live page.
+  try {
+    await driver.ensureOperational();
+  } catch (err) {
+    throw new McpToolError(
+      `Failed to launch the LinkedIn driver: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
   }
 
   if (driver.status !== 'ready') {
@@ -601,7 +776,52 @@ export const TOOL_HANDLERS: Record<string, ToolHandler> = {
     return jsonResult(result);
   },
 
+  linkedin_get_invitations: async () => {
+    const driver = await withAuthedDriver();
+    const result = await driver.connections.getConnectionRequests();
+    return jsonResult(result);
+  },
+
+  linkedin_accept_invitation: async (args) => {
+    const driver = await withAuthedDriver();
+    const profileId = profileSlug(requireString(args, 'profileId'));
+    const result = await driver.connections.acceptConnectionRequest(profileId);
+    return jsonResult(result);
+  },
+
+  linkedin_withdraw_invitation: async (args) => {
+    const driver = await withAuthedDriver();
+    const profileId = profileSlug(requireString(args, 'profileId'));
+    const result = await driver.connections.withdrawConnectionRequest(profileId);
+    return jsonResult(result);
+  },
+
+  // --- Feed engagement ----------------------------------------------------
+  linkedin_react: async (args) => {
+    const driver = await withAuthedDriver();
+    const postUrl = requireString(args, 'postUrl');
+    const reaction = optionalEnum(args, 'reaction', REACTION_TYPES) ?? 'like';
+    const result = await driver.feed.reactToPost(postUrl, reaction);
+    return jsonResult(result);
+  },
+
+  linkedin_comment: async (args) => {
+    const driver = await withAuthedDriver();
+    const postUrl = requireString(args, 'postUrl');
+    const text = requireString(args, 'text');
+    const result = await driver.feed.commentOnPost(postUrl, text);
+    return jsonResult(result);
+  },
+
   // --- Feed / notifications ----------------------------------------------
+  linkedin_get_member_posts: async (args) => {
+    const driver = await withAuthedDriver();
+    const profileUrl = requireString(args, 'profileUrl');
+    const limit = optionalInt(args, 'limit', 1, 20);
+    const result = await driver.feed.getMemberPosts(profileUrl, limit);
+    return jsonResult(result);
+  },
+
   linkedin_get_feed: async (args) => {
     const driver = await withAuthedDriver();
     const limit = optionalInt(args, 'limit', 1, 50);

@@ -74,8 +74,72 @@ const connectionsScenario: ScenarioModule = {
           : ctx.driver.connections.sendConnectionRequest(profileUrl);
       },
     },
+
+    // ---------------------------------------------------------------------
+    // MUTATING — accept a pending RECEIVED invitation.
+    // Target is the inviter's vanity slug, drawn ONLY from
+    // targets.acceptRequestProfileId; absent -> empty plan.target -> graceful
+    // skip. (You must have arranged a real inbound invite for this to pass.)
+    // ---------------------------------------------------------------------
+    {
+      name: 'connections-acceptConnectionRequest',
+      kind: 'mutating',
+      group: 'connections',
+      action: 'connections.acceptConnectionRequest',
+      sourceHint: SOURCE_HINT,
+      // `inputs` and `plan.target` are bound to targets.acceptRequestProfileId
+      // at run time by buildConnectionsScenario().
+      plan: {
+        effect: 'Accepts a pending RECEIVED invitation from the target member.',
+        target: '',
+        payload: {},
+      },
+      run: (ctx: RunContext) =>
+        ctx.driver.connections.acceptConnectionRequest(
+          (ctx.targets.acceptRequestProfileId ?? '').trim(),
+        ),
+    },
+
+    // ---------------------------------------------------------------------
+    // MUTATING — withdraw a pending SENT invitation.
+    // Target is the recipient's vanity slug, resolved from
+    // targets.withdrawTarget (profileId, else the /in/<slug> of profileUrl);
+    // unresolvable -> empty plan.target -> graceful skip.
+    // ---------------------------------------------------------------------
+    {
+      name: 'connections-withdrawConnectionRequest',
+      kind: 'mutating',
+      group: 'connections',
+      action: 'connections.withdrawConnectionRequest',
+      sourceHint: SOURCE_HINT,
+      // `inputs` and `plan.target` are bound to targets.withdrawTarget at run
+      // time by buildConnectionsScenario().
+      plan: {
+        effect: 'Withdraws a pending SENT invitation to the target member.',
+        target: '',
+        payload: {},
+      },
+      run: (ctx: RunContext) =>
+        ctx.driver.connections.withdrawConnectionRequest(
+          withdrawSlug(ctx.targets.withdrawTarget),
+        ),
+    },
   ],
 };
+
+/**
+ * Resolve a withdraw target to the vanity slug withdrawConnectionRequest needs:
+ * prefer an explicit profileId, else extract the /in/<slug> from profileUrl.
+ * Returns '' when neither is usable, so the Runner's Layer-3 gate records a
+ * graceful skip rather than firing on an empty target.
+ */
+function withdrawSlug(wt?: { profileId?: string; profileUrl?: string }): string {
+  const id = wt?.profileId?.trim();
+  if (id) return id;
+  const url = wt?.profileUrl?.trim();
+  if (url) return url.match(/\/in\/([^/?#]+)/)?.[1] ?? '';
+  return '';
+}
 
 /**
  * The mutating step's `plan` must reflect the human-supplied target so the
@@ -86,28 +150,63 @@ const connectionsScenario: ScenarioModule = {
  */
 export function buildConnectionsScenario(targets: {
   connectionTarget?: { profileUrl: string; note?: string };
+  acceptRequestProfileId?: string;
+  withdrawTarget?: { profileId?: string; profileUrl?: string };
 }): ScenarioModule {
   const ct = targets.connectionTarget;
   const profileUrl = ct?.profileUrl ?? '';
   const note = ct?.note;
+  const acceptId = (targets.acceptRequestProfileId ?? '').trim();
+  const withdrawId = withdrawSlug(targets.withdrawTarget);
 
+  // Each mutating step binds its OWN dedicated target — never cross-wire one
+  // mutation's target into another step's plan — so switch on the step name.
   const steps = connectionsScenario.steps.map((step) => {
     if (step.kind !== 'mutating') return step;
-    return {
-      ...step,
-      inputs: {
-        profileUrl,
-        ...(note !== undefined ? { note } : {}),
-      },
-      plan: {
-        effect: 'Sends a LinkedIn connection request to the target profile.',
-        target: profileUrl,
-        payload: {
+
+    if (step.name === 'connections-sendConnectionRequest') {
+      return {
+        ...step,
+        inputs: {
           profileUrl,
-          ...(note !== undefined ? { note } : { note: '(no note)' }),
+          ...(note !== undefined ? { note } : {}),
         },
-      },
-    } satisfies Step;
+        plan: {
+          effect: 'Sends a LinkedIn connection request to the target profile.',
+          target: profileUrl,
+          payload: {
+            profileUrl,
+            ...(note !== undefined ? { note } : { note: '(no note)' }),
+          },
+        },
+      } satisfies Step;
+    }
+
+    if (step.name === 'connections-acceptConnectionRequest') {
+      return {
+        ...step,
+        inputs: { profileId: acceptId },
+        plan: {
+          effect: 'Accepts a pending RECEIVED invitation from the target member.',
+          target: acceptId,
+          payload: { profileId: acceptId },
+        },
+      } satisfies Step;
+    }
+
+    if (step.name === 'connections-withdrawConnectionRequest') {
+      return {
+        ...step,
+        inputs: { profileId: withdrawId },
+        plan: {
+          effect: 'Withdraws a pending SENT invitation to the target member.',
+          target: withdrawId,
+          payload: { profileId: withdrawId },
+        },
+      } satisfies Step;
+    }
+
+    return step;
   });
 
   return { name: connectionsScenario.name, steps };

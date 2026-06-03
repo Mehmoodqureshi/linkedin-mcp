@@ -85,6 +85,8 @@ async function loadSuite(group: ScenarioGroup): Promise<LoadedSuite> {
     default?: unknown;
     buildConnectionsScenario?: (t: {
       connectionTarget?: { profileUrl: string; note?: string };
+      acceptRequestProfileId?: string;
+      withdrawTarget?: { profileId?: string; profileUrl?: string };
     }) => { name: string; steps: Step[] };
   };
 
@@ -105,6 +107,12 @@ async function loadSuite(group: ScenarioGroup): Promise<LoadedSuite> {
         const built = build({
           ...(ctx.targets.connectionTarget !== undefined
             ? { connectionTarget: ctx.targets.connectionTarget }
+            : {}),
+          ...(ctx.targets.acceptRequestProfileId !== undefined
+            ? { acceptRequestProfileId: ctx.targets.acceptRequestProfileId }
+            : {}),
+          ...(ctx.targets.withdrawTarget !== undefined
+            ? { withdrawTarget: ctx.targets.withdrawTarget }
             : {}),
         });
         for (const step of built.steps) {

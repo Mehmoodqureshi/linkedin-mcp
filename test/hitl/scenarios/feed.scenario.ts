@@ -104,32 +104,87 @@ const scenario: ScenarioModule = {
     // --- MUTATING: like a post (three-layer safety gate) -----------------
     // Layer 1 is this call site choosing runMutating. Layers 2 (opt-in flag)
     // and 3 (target presence + literal 'yes') are enforced inside the Runner.
-    // We still guard the target here so an absent key skips gracefully with a
-    // clear note instead of handing the gate an empty target.
+    // We still guard each target here so an absent key skips gracefully with a
+    // clear note instead of handing the gate an empty target. NOTE: don't
+    // `return` early on a missing key — that would silently skip the react and
+    // comment steps below; gate each step independently instead.
     const likePostUrl = targets.likePostUrl?.trim();
-    if (!likePostUrl) {
+    if (likePostUrl) {
+      await runner.runMutating(
+        {
+          name: 'feed-likePost',
+          group: 'feed',
+          action: 'feed.likePost',
+          inputs: { postUrl: likePostUrl },
+          sourceHint: SOURCE_HINT,
+        },
+        {
+          effect: 'Likes the post at the target URL (adds your Like reaction).',
+          target: likePostUrl,
+          payload: { postUrl: likePostUrl },
+        },
+        rc,
+        () => ctx.driver.feed.likePost(likePostUrl),
+      );
+    } else {
       process.stderr.write(
         '  feed.likePost: no likePostUrl configured — skipping.\n',
       );
-      return;
     }
 
-    await runner.runMutating(
-      {
-        name: 'feed-likePost',
-        group: 'feed',
-        action: 'feed.likePost',
-        inputs: { postUrl: likePostUrl },
-        sourceHint: SOURCE_HINT,
-      },
-      {
-        effect: 'Likes the post at the target URL (adds your Like reaction).',
-        target: likePostUrl,
-        payload: { postUrl: likePostUrl },
-      },
-      rc,
-      () => ctx.driver.feed.likePost(likePostUrl),
-    );
+    // --- MUTATING: react to a post (exercises the reactions flyout) -------
+    // Distinct from likePost: a non-'like' reaction drives the hover→pick path
+    // in reactToPost, which likePost (a 'like' shortcut) never touches.
+    const reactPostUrl = targets.reactTarget?.postUrl?.trim();
+    if (reactPostUrl) {
+      const reaction = targets.reactTarget?.reaction ?? 'like';
+      await runner.runMutating(
+        {
+          name: 'feed-reactToPost',
+          group: 'feed',
+          action: 'feed.reactToPost',
+          inputs: { postUrl: reactPostUrl, reaction },
+          sourceHint: SOURCE_HINT,
+        },
+        {
+          effect: `Adds your "${reaction}" reaction to the post at the target URL.`,
+          target: reactPostUrl,
+          payload: { postUrl: reactPostUrl, reaction },
+        },
+        rc,
+        () => ctx.driver.feed.reactToPost(reactPostUrl, reaction),
+      );
+    } else {
+      process.stderr.write(
+        '  feed.reactToPost: no reactTarget configured — skipping.\n',
+      );
+    }
+
+    // --- MUTATING: comment on a post -------------------------------------
+    const commentPostUrl = targets.commentTarget?.postUrl?.trim();
+    const commentText = targets.commentTarget?.text?.trim();
+    if (commentPostUrl && commentText) {
+      await runner.runMutating(
+        {
+          name: 'feed-commentOnPost',
+          group: 'feed',
+          action: 'feed.commentOnPost',
+          inputs: { postUrl: commentPostUrl, text: commentText },
+          sourceHint: SOURCE_HINT,
+        },
+        {
+          effect: 'Posts a public comment on the post at the target URL.',
+          target: commentPostUrl,
+          payload: { postUrl: commentPostUrl, text: commentText },
+        },
+        rc,
+        () => ctx.driver.feed.commentOnPost(commentPostUrl, commentText),
+      );
+    } else {
+      process.stderr.write(
+        '  feed.commentOnPost: no commentTarget configured — skipping.\n',
+      );
+    }
   },
 };
 

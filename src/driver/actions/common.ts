@@ -218,3 +218,29 @@ export async function firstVisible(
 export function enc(value: string): string {
   return encodeURIComponent(value);
 }
+
+/**
+ * Normalize a profile reference to a canonical `/in/<slug>/` URL. Accepts a full
+ * http(s) URL (returned as-is), an `/in/<slug>` path, or a BARE vanity slug.
+ *
+ * This mirrors ProfileActions so every module resolves profiles identically. A
+ * bare slug must never be concatenated straight onto the origin — `${BASE}${slug}`
+ * yields `https://www.linkedin.comslug` (ERR_NAME_NOT_RESOLVED), the exact bug
+ * that bit send_connection / send_message when handed a bare slug.
+ */
+export function normalizeProfileUrl(input: string): string {
+  if (/^https?:\/\//i.test(input)) return input;
+  const slug = input.replace(/^\/+|\/+$/g, '').replace(/^in\//, '');
+  return `${LINKEDIN_BASE}/in/${slug}/`;
+}
+
+/**
+ * Resolve an arbitrary LinkedIn reference (e.g. a post permalink) to an absolute
+ * URL. Full http(s) URLs pass through; anything else is treated as a path and
+ * joined to the origin with exactly one leading slash — so a missing or extra
+ * leading slash can never produce a malformed host.
+ */
+export function resolveLinkedInUrl(input: string): string {
+  if (/^https?:\/\//i.test(input)) return input;
+  return `${LINKEDIN_BASE}/${input.replace(/^\/+/, '')}`;
+}

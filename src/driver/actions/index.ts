@@ -36,7 +36,14 @@ export { ConnectionActions, MAX_NOTE_LENGTH } from './connections';
 export type { ConnectionRequestResult, PendingRequest } from './connections';
 
 export { FeedActions } from './feed';
-export type { FeedPost, NotificationItem } from './feed';
+export type {
+  FeedPost,
+  NotificationItem,
+  MemberPost,
+  ReactionType,
+  ReactionResult,
+  CommentResult,
+} from './feed';
 
 export {
   NeedsLoginError,

@@ -34,7 +34,8 @@ Options:
                         Groups: auth, profile, search, messages, connections, feed
                         e.g. --only profile,search
   --include-mutating    Opt in to MUTATING actions (sendMessage, sendConnectionRequest,
-                        acceptConnectionRequest, withdrawConnectionRequest, likePost, logout).
+                        acceptConnectionRequest, withdrawConnectionRequest, likePost,
+                        reactToPost, commentOnPost, logout).
                         OFF by default. Even when set, every mutating step requires a
                         per-step typed 'yes' confirmation against a config-supplied target.
   --headed              Run with a visible browser window (default; required for HITL).
