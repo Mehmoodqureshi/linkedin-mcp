@@ -319,9 +319,11 @@ export class EmbeddedBrowser {
     return new Promise((resolve) => {
       const parent = this.win && !this.win.isDestroyed() ? this.win : undefined;
       const loginWin = new BrowserWindow({
-        width: 500,
-        height: 680,
+        width: 520,
+        height: 720,
         ...(parent ? { parent } : {}),
+        show: false,
+        center: true,
         title: 'Sign in to LinkedIn',
         autoHideMenuBar: true,
         backgroundColor: '#ffffff',
@@ -331,6 +333,13 @@ export class EmbeddedBrowser {
           contextIsolation: true,
           nodeIntegration: false,
         },
+      });
+
+      // Show only once the first paint is ready, so the window never flashes
+      // blank/white (which reads as "nothing happened").
+      loginWin.once('ready-to-show', () => {
+        loginWin.show();
+        loginWin.focus();
       });
 
       const wc = loginWin.webContents;
@@ -346,6 +355,12 @@ export class EmbeddedBrowser {
         if (isAuthPopupUrl(url)) return { action: 'allow' };
         void shell.openExternal(url).catch(() => {});
         return { action: 'deny' };
+      });
+
+      // Diagnostics: surface load failures so a blank window isn't silent.
+      wc.on('did-fail-load', (_e, code, desc, url) => {
+        if (code === -3) return; // ERR_ABORTED from a redirect — benign
+        process.stderr.write(`[login] did-fail-load ${code} ${desc} ${url}\n`);
       });
 
       let settled = false;
