@@ -53,6 +53,8 @@ const INVOKE_CHANNELS = [
   'browser:bounds',
   // Opens LinkedIn's own login page in a dedicated in-app window.
   'linkedin:open-login',
+  // Onboarding hand-off: swap the connect-UI window to the main control panel.
+  'app:open-main',
 ] as const;
 
 /** One-way (fire-and-forget) channels. */

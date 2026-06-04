@@ -58,8 +58,9 @@ export function OnboardingFlow(): JSX.Element {
       onBack={() => setStep('mcp')}
       signIn={signInToLinkedIn}
       onDone={() => {
-        // eslint-disable-next-line no-console
-        console.log('[onboarding] complete');
+        // Hand off to the main control panel (loads index.html + docks the
+        // LinkedIn view). No-op in a standalone preview without the bridge.
+        void bridge?.invoke?.('app:open-main');
       }}
     />
   );

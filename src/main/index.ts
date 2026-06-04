@@ -374,6 +374,19 @@ async function bootstrap(): Promise<void> {
   }, !isMcpMode);
   embedded.registerIpc();
 
+  // 2c. Onboarding hand-off: when the connect-UI flow finishes, swap the window
+  //     from connect.html to the main control panel and dock the LinkedIn view.
+  ipcMain.handle('app:open-main', async () => {
+    const win = mainWindow;
+    if (!win || win.isDestroyed()) return { ok: false };
+    await win.loadFile(join(__dirname, '../renderer/index.html'));
+    embedded?.setWindow(win);
+    await embedded?.attach().catch((err) => {
+      process.stderr.write(`[main] embedded attach after finish failed: ${String(err)}\n`);
+    });
+    return { ok: true };
+  });
+
   // 3. Boot the MCP stdio server. In MCP mode this binds stdin/stdout to the
   //    @modelcontextprotocol/sdk Server immediately so Claude Desktop can talk
   //    to us. In UI mode we still start it (idempotent) so the renderer can
