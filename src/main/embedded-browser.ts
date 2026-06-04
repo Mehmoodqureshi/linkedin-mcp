@@ -134,6 +134,18 @@ export class EmbeddedBrowser {
         return { authenticated: false, error: err instanceof Error ? err.message : String(err) };
       }
     });
+    // Whether the persisted partition currently holds a LinkedIn auth cookie.
+    ipcMain.handle('linkedin:session-state', () => this.sessionState());
+    // Sign out: wipe the persisted partition (cookies/storage). Works without
+    // the driver being attached, so it's usable from the onboarding flow too.
+    ipcMain.handle('linkedin:clear-session', async () => {
+      try {
+        await this.clearSession();
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    });
   }
 
   public unregisterIpc(): void {
@@ -147,6 +159,8 @@ export class EmbeddedBrowser {
       'browser:login',
       'browser:bounds',
       'linkedin:open-login',
+      'linkedin:session-state',
+      'linkedin:clear-session',
     ]) {
       ipcMain.removeHandler(ch);
     }
@@ -383,6 +397,27 @@ export class EmbeddedBrowser {
 
       wc.loadURL(LOGIN_URL).catch(() => {});
     });
+  }
+
+  /** True if the persisted LinkedIn partition holds an auth cookie (`li_at`). */
+  public async sessionState(): Promise<{ authenticated: boolean }> {
+    try {
+      const cookies = await session
+        .fromPartition(SESSION_PARTITION)
+        .cookies.get({ domain: '.linkedin.com' });
+      return { authenticated: cookies.some((c) => c.name === 'li_at') };
+    } catch {
+      return { authenticated: false };
+    }
+  }
+
+  /** Sign out: clear all cookies/storage in the persisted LinkedIn partition. */
+  public async clearSession(): Promise<void> {
+    await session.fromPartition(SESSION_PARTITION).clearStorageData();
+    // If the docked view is live, send it back to the login page so the UI
+    // reflects the signed-out state immediately.
+    const wc = this.activeContents();
+    if (wc) wc.loadURL(LOGIN_URL).catch(() => {});
   }
 
   private async navigate(url: string): Promise<void> {

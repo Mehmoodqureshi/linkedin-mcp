@@ -299,6 +299,7 @@
 }
 .rw-btn--ghost:hover { color: var(--rw-text); filter: none; border-color: #2f3236; }
 .rw-actions--split { justify-content: space-between; }
+.rw-actions__group { display: inline-flex; align-items: center; gap: 10px; }
 
 /* ---- Decoration ---- */
 .rw-wave {

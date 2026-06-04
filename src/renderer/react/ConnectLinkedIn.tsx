@@ -7,7 +7,7 @@
  * idle -> connecting -> connected, with the connected account once known.
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { AppShell } from './shell';
 
@@ -23,14 +23,37 @@ export interface ConnectLinkedInProps {
    * (e.g. the member's name). If omitted, a short demo connection is simulated.
    */
   signIn?: () => Promise<string | undefined>;
+  /** Check whether a LinkedIn session already exists (to show "Connected"). */
+  checkAuth?: () => Promise<boolean>;
+  /** Sign out of LinkedIn (clears the session), returning to the idle state. */
+  logOut?: () => Promise<void>;
 }
 
-export function ConnectLinkedIn({ onBack, onDone, signIn }: ConnectLinkedInProps): JSX.Element {
+export function ConnectLinkedIn({
+  onBack,
+  onDone,
+  signIn,
+  checkAuth,
+  logOut,
+}: ConnectLinkedInProps): JSX.Element {
   const [status, setStatus] = useState<Status>('idle');
   const [account, setAccount] = useState<string | undefined>(undefined);
 
   const connecting = status === 'connecting';
   const connected = status === 'connected';
+
+  // On mount, reflect an already-authenticated session as Connected so the user
+  // gets a Log-out option instead of being asked to sign in again.
+  useEffect(() => {
+    let cancelled = false;
+    if (!checkAuth) return;
+    void checkAuth().then((ok) => {
+      if (!cancelled && ok) setStatus('connected');
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [checkAuth]);
 
   const handleSignIn = async (): Promise<void> => {
     if (connecting) return;
@@ -41,6 +64,15 @@ export function ConnectLinkedIn({ onBack, onDone, signIn }: ConnectLinkedInProps
       setStatus('connected');
     } catch {
       setStatus('error');
+    }
+  };
+
+  const handleLogOut = async (): Promise<void> => {
+    try {
+      await logOut?.();
+    } finally {
+      setAccount(undefined);
+      setStatus('idle');
     }
   };
 
@@ -100,9 +132,14 @@ export function ConnectLinkedIn({ onBack, onDone, signIn }: ConnectLinkedInProps
             ← Back
           </button>
           {connected && (
-            <button type="button" className="rw-btn" onClick={() => onDone?.()}>
-              Finish →
-            </button>
+            <span className="rw-actions__group">
+              <button type="button" className="rw-btn rw-btn--ghost" onClick={() => void handleLogOut()}>
+                Log out
+              </button>
+              <button type="button" className="rw-btn" onClick={() => onDone?.()}>
+                Finish →
+              </button>
+            </span>
           )}
         </div>
       </div>

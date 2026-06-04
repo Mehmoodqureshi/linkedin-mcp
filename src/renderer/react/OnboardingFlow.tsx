@@ -57,6 +57,15 @@ export function OnboardingFlow(): JSX.Element {
     <ConnectLinkedIn
       onBack={() => setStep('mcp')}
       signIn={signInToLinkedIn}
+      checkAuth={async () => {
+        const r = (await bridge?.invoke?.('linkedin:session-state')) as
+          | { authenticated?: boolean }
+          | undefined;
+        return Boolean(r?.authenticated);
+      }}
+      logOut={async () => {
+        await bridge?.invoke?.('linkedin:clear-session');
+      }}
       onDone={() => {
         // Hand off to the main control panel (loads index.html + docks the
         // LinkedIn view). No-op in a standalone preview without the bridge.

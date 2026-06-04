@@ -53,6 +53,10 @@ const INVOKE_CHANNELS = [
   'browser:bounds',
   // Opens LinkedIn's own login page in a dedicated in-app window.
   'linkedin:open-login',
+  // Is the persisted LinkedIn session currently authenticated?
+  'linkedin:session-state',
+  // Sign out: clear the persisted LinkedIn session.
+  'linkedin:clear-session',
   // Onboarding hand-off: swap the connect-UI window to the main control panel.
   'app:open-main',
 ] as const;
