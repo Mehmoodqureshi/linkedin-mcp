@@ -1,10 +1,9 @@
 /**
  * Renderer for the LinkedIn MCP control panel + embedded browser.
  *
- * Left rail (automation cockpit): live status pills, "Today's Activity" (today's
- * per-action usage vs the daily safety caps), session controls, the MCP server
- * info + tool catalog, the Claude Desktop connect snippet, and a live activity
- * log of what the agent is doing.
+ * Left rail: live status pills, a NAVIGATION rail that steers the embedded
+ * browser (Feed / Network / Jobs / …), session controls, the MCP tool catalog,
+ * the Claude Desktop connect snippet, and an activity log.
  *
  * Right pane: a NATIVE Electron BrowserView (the real LinkedIn page) docked over
  * the `#stage` placeholder by the main process. The renderer never paints the
@@ -156,6 +155,24 @@ const navItems = Array.from(
   document.querySelectorAll<HTMLButtonElement>('.nav-item'),
 );
 
+// Search controls
+const searchQuery = el<HTMLInputElement>('search-query');
+const searchLocation = el<HTMLInputElement>('search-location');
+const btnSearch = el<HTMLButtonElement>('btn-search');
+const btnExport = el<HTMLButtonElement>('btn-export');
+const searchResults = el<HTMLDivElement>('search-results');
+const segItems = Array.from(document.querySelectorAll<HTMLButtonElement>('.seg-item'));
+const filtersPeople = el<HTMLDivElement>('filters-people');
+const filtersJobs = el<HTMLDivElement>('filters-jobs');
+// People filters
+const fTitle = el<HTMLInputElement>('f-title');
+const fCompany = el<HTMLInputElement>('f-company');
+const fDegree = el<HTMLSelectElement>('f-degree');
+// Job filters
+const fDate = el<HTMLSelectElement>('f-date');
+const fExp = el<HTMLSelectElement>('f-exp');
+const fRemote = el<HTMLInputElement>('f-remote');
+const fEasy = el<HTMLInputElement>('f-easy');
 // Daily limits
 const quotaList = el<HTMLDivElement>('quota-list');
 
@@ -371,6 +388,286 @@ for (const item of navItems) {
     if (!url) return;
     void browserCmd('browser:navigate', url);
   });
+}
+
+// ---------------------------------------------------------------------------
+// Search (People / Jobs) — drives the embedded view AND lists structured cards
+// ---------------------------------------------------------------------------
+// A search runs the driver's URL-built + scrape pipeline on the shared page, so
+// the native pane navigates to the LinkedIn results while we render clickable
+// cards here. Clicking a card opens that profile/job in the pane.
+
+type SearchMode = 'people' | 'jobs';
+let searchMode: SearchMode = 'people';
+
+/** Last result set, retained so "Export CSV" can serialize exactly what's shown. */
+let lastPeople: PersonResult[] = [];
+let lastJobs: JobResult[] = [];
+
+for (const seg of segItems) {
+  seg.addEventListener('click', () => {
+    const mode = (seg.dataset.mode as SearchMode) ?? 'people';
+    if (mode === searchMode) return;
+    searchMode = mode;
+    for (const s of segItems) s.classList.toggle('active', s === seg);
+    searchQuery.placeholder = mode === 'people' ? 'Search people…' : 'Search jobs…';
+    searchLocation.hidden = mode !== 'jobs';
+    filtersPeople.hidden = mode !== 'people';
+    filtersJobs.hidden = mode !== 'jobs';
+    searchResults.replaceChildren();
+    btnExport.disabled = true;
+  });
+}
+
+btnSearch.addEventListener('click', () => void runSearch());
+btnExport.addEventListener('click', exportCsv);
+searchQuery.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') void runSearch();
+});
+for (const f of [searchLocation, fTitle, fCompany]) {
+  f.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') void runSearch();
+  });
+}
+
+/** Gather the active people filters into the driver's PeopleFilters shape. */
+function peopleFilters(): Record<string, string> {
+  const f: Record<string, string> = {};
+  if (fTitle.value.trim()) f.title = fTitle.value.trim();
+  if (fCompany.value.trim()) f.company = fCompany.value.trim();
+  if (fDegree.value) f.connectionDegree = fDegree.value;
+  return f;
+}
+
+/** Gather the active job filters into the driver's JobFilters shape. */
+function jobFilters(): Record<string, string | boolean> {
+  const f: Record<string, string | boolean> = {};
+  if (searchLocation.value.trim()) f.location = searchLocation.value.trim();
+  if (fDate.value) f.datePosted = fDate.value;
+  if (fExp.value) f.experienceLevel = fExp.value;
+  if (fRemote.checked) f.remote = true;
+  if (fEasy.checked) f.easyApply = true;
+  return f;
+}
+
+async function runSearch(): Promise<void> {
+  const query = searchQuery.value.trim();
+  if (!query) {
+    searchQuery.focus();
+    return;
+  }
+  await withButton(btnSearch, async () => {
+    btnSearch.textContent = 'Searching…';
+    btnExport.disabled = true;
+    searchResults.replaceChildren(emptyRow('Searching LinkedIn…'));
+    try {
+      if (searchMode === 'people') {
+        const filters = peopleFilters();
+        const people = await call<PersonResult[]>('linkedin:search-people', {
+          query,
+          ...(Object.keys(filters).length ? { filters } : {}),
+        });
+        lastPeople = people;
+        renderPeople(people);
+        btnExport.disabled = people.length === 0;
+        log(`Found ${people.length} ${people.length === 1 ? 'person' : 'people'} for “${query}”.`, 'success');
+      } else {
+        const filters = jobFilters();
+        const jobs = await call<JobResult[]>('linkedin:search-jobs', {
+          query,
+          ...(Object.keys(filters).length ? { filters } : {}),
+        });
+        lastJobs = jobs;
+        renderJobs(jobs);
+        btnExport.disabled = jobs.length === 0;
+        log(`Found ${jobs.length} ${jobs.length === 1 ? 'job' : 'jobs'} for “${query}”.`, 'success');
+      }
+    } catch (err) {
+      searchResults.replaceChildren(emptyRow(classifySearchError(err as Error & { code?: string })));
+    } finally {
+      btnSearch.textContent = 'Search';
+    }
+  });
+}
+
+/** Turn a driver error code into a clear, actionable message (+ log line). */
+function classifySearchError(e: Error & { code?: string }): string {
+  switch (e.code) {
+    case 'needs_login':
+      log('Search needs an authenticated session. Sign in via the pane.', 'warn');
+      return 'Sign in first — then search again.';
+    case 'needs_verification':
+      log('LinkedIn checkpoint — solve the challenge in the pane, then retry.', 'warn');
+      return '⚠ Verify in the pane (LinkedIn security check), then search again.';
+    case 'quota_exceeded':
+      log(e.message, 'warn');
+      return e.message;
+    default:
+      log(`Search failed: ${e.message}`, 'error');
+      return `Search failed: ${e.message}`;
+  }
+}
+
+function emptyRow(text: string): HTMLElement {
+  const d = document.createElement('div');
+  d.className = 'res-empty';
+  d.textContent = text;
+  return d;
+}
+
+/**
+ * A result card: a clickable header that opens `url` in the embedded pane, plus
+ * an optional row of action buttons (e.g. Connect for people).
+ */
+function resultCard(
+  title: string,
+  sub: string,
+  meta: string[],
+  url: string | undefined,
+  actions: Array<{ label: string; primary?: boolean; run: (btn: HTMLButtonElement) => void }> = [],
+): HTMLElement {
+  const card = document.createElement('div');
+  card.className = 'res-card';
+
+  const header = document.createElement('div');
+  if (url) {
+    header.style.cursor = 'pointer';
+    header.addEventListener('click', () => void browserCmd('browser:navigate', url));
+  }
+
+  const t = document.createElement('div');
+  t.className = 'rc-title';
+  t.textContent = title;
+  header.appendChild(t);
+
+  if (sub) {
+    const s = document.createElement('div');
+    s.className = 'rc-sub';
+    s.textContent = sub;
+    header.appendChild(s);
+  }
+
+  const tags = meta.filter(Boolean);
+  if (tags.length) {
+    const m = document.createElement('div');
+    m.className = 'rc-meta';
+    for (const text of tags) {
+      const tag = document.createElement('span');
+      tag.className = 'res-tag';
+      tag.textContent = text;
+      m.appendChild(tag);
+    }
+    header.appendChild(m);
+  }
+  card.appendChild(header);
+
+  if (actions.length) {
+    const row = document.createElement('div');
+    row.className = 'rc-actions';
+    for (const a of actions) {
+      const b = document.createElement('button');
+      b.className = `rc-btn${a.primary ? ' primary' : ''}`;
+      b.type = 'button';
+      b.textContent = a.label;
+      b.addEventListener('click', () => a.run(b));
+      row.appendChild(b);
+    }
+    card.appendChild(row);
+  }
+  return card;
+}
+
+function renderPeople(people: PersonResult[]): void {
+  if (!people.length) {
+    searchResults.replaceChildren(emptyRow('No people found.'));
+    return;
+  }
+  searchResults.replaceChildren(
+    ...people.map((p) =>
+      resultCard(
+        p.name || '(unknown)',
+        p.headline || '',
+        [p.location ?? '', p.connectionDegree ?? ''],
+        p.profileUrl,
+        p.profileUrl
+          ? [
+              { label: 'Open', run: () => void browserCmd('browser:navigate', p.profileUrl as string) },
+              { label: 'Connect', primary: true, run: (b) => void connectTo(p.profileUrl as string, b) },
+            ]
+          : [],
+      ),
+    ),
+  );
+}
+
+function renderJobs(jobs: JobResult[]): void {
+  if (!jobs.length) {
+    searchResults.replaceChildren(emptyRow('No jobs found.'));
+    return;
+  }
+  searchResults.replaceChildren(
+    ...jobs.map((j) =>
+      resultCard(
+        j.title || '(untitled role)',
+        [j.company, j.location].filter(Boolean).join(' · '),
+        [j.postedDate ?? '', j.easyApply ? 'Easy Apply' : ''],
+        j.jobUrl,
+        j.jobUrl
+          ? [{ label: 'Open job', run: () => void browserCmd('browser:navigate', j.jobUrl as string) }]
+          : [],
+      ),
+    ),
+  );
+}
+
+/** Send a connection request from a result card, reflecting the outcome inline. */
+async function connectTo(profileUrl: string, btn: HTMLButtonElement): Promise<void> {
+  btn.disabled = true;
+  const prev = btn.textContent;
+  btn.textContent = 'Sending…';
+  try {
+    const res = await call<{ success: boolean; outcome?: string; message: string }>(
+      'linkedin:send-connection',
+      { profileUrl },
+    );
+    btn.textContent = res.success ? 'Sent ✓' : (res.outcome ?? 'Done');
+    log(res.message, res.success ? 'success' : 'warn');
+  } catch (err) {
+    const e = err as Error & { code?: string };
+    btn.disabled = false;
+    btn.textContent = prev;
+    log(classifySearchError(e), e.code === 'quota_exceeded' ? 'warn' : 'error');
+  }
+}
+
+/** Export the current result set to a CSV file the user can save. */
+function exportCsv(): void {
+  const isPeople = searchMode === 'people';
+  const headers = isPeople
+    ? ['name', 'headline', 'location', 'connectionDegree', 'profileUrl']
+    : ['title', 'company', 'location', 'postedDate', 'easyApply', 'jobUrl'];
+  const rows: string[][] = isPeople
+    ? lastPeople.map((p) => [p.name, p.headline, p.location, p.connectionDegree, p.profileUrl].map(cell))
+    : lastJobs.map((j) =>
+        [j.title, j.company, j.location, j.postedDate, j.easyApply ? 'yes' : 'no', j.jobUrl].map(cell),
+      );
+  if (!rows.length) return;
+
+  const csv = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `linkedin-${searchMode}-${Date.now()}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+  log(`Exported ${rows.length} ${searchMode} to CSV.`, 'success');
+}
+
+/** CSV-escape a single cell. */
+function cell(v: string | undefined): string {
+  const s = (v ?? '').replace(/"/g, '""');
+  return /[",\n]/.test(s) ? `"${s}"` : s;
 }
 
 // ---------------------------------------------------------------------------
