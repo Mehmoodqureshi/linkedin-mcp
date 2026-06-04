@@ -192,6 +192,60 @@
 .rw-tag--manual { color: var(--rw-manual); }
 .rw-tag--accent { color: var(--rw-accent); }
 
+/* ---- Sign-in card (step 2) ---- */
+.rw-signin {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  width: 100%;
+  min-height: 84px;
+  padding: 16px 22px;
+  background: var(--rw-surface);
+  border: 1px solid var(--rw-border);
+  border-radius: 12px;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.1s ease;
+}
+.rw-signin:hover:not(:disabled) { border-color: var(--rw-accent); background: #14181d; }
+.rw-signin:active:not(:disabled) { transform: translateY(1px); }
+.rw-signin:focus-visible { outline: 2px solid var(--rw-accent); outline-offset: 2px; }
+.rw-signin:disabled { cursor: default; }
+.rw-signin--ok { border-color: var(--rw-auto); background: #10160f; cursor: default; }
+.rw-signin__cta {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  color: var(--rw-accent);
+}
+
+/* ---- Security note ---- */
+.rw-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  margin: 16px 0 0;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.45;
+  color: var(--rw-muted);
+}
+.rw-note__lock { flex: 0 0 auto; margin-top: 1px; }
+
+/* ---- Spinner ---- */
+.rw-spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: rw-spin 0.7s linear infinite;
+}
+@keyframes rw-spin { to { transform: rotate(360deg); } }
+
 /* ---- Copy bar (instructions + copy button, no code shown) ---- */
 .rw-copybar {
   display: flex;
