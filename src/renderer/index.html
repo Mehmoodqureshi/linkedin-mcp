@@ -323,96 +323,14 @@
             <span class="pill"><span class="dot" id="pill-mcp-dot"></span><span id="pill-mcp">MCP</span></span>
           </div>
 
-          <!-- Search (drives the embedded view + structured results) -->
-          <details class="block" id="search-block" open>
-            <summary>
-              <span>Search</span>
-              <span class="chev">›</span>
-            </summary>
-            <div class="block-body">
-              <div class="seg" id="search-seg">
-                <button class="seg-item active" data-mode="people" type="button">People</button>
-                <button class="seg-item" data-mode="jobs" type="button">Jobs</button>
-              </div>
-              <input class="field" id="search-query" type="text" placeholder="Search people…" spellcheck="false" autocomplete="off" />
-              <input class="field" id="search-location" type="text" placeholder="Location (optional)" spellcheck="false" autocomplete="off" hidden />
-
-              <!-- People-only filters -->
-              <div class="filters" id="filters-people">
-                <input class="field" id="f-title" type="text" placeholder="Title / role (optional)" spellcheck="false" autocomplete="off" />
-                <input class="field" id="f-company" type="text" placeholder="Company (optional)" spellcheck="false" autocomplete="off" />
-                <select class="field" id="f-degree">
-                  <option value="">Any connection degree</option>
-                  <option value="1st">1st degree</option>
-                  <option value="2nd">2nd degree</option>
-                  <option value="3rd">3rd+ degree</option>
-                </select>
-              </div>
-
-              <!-- Job-only filters -->
-              <div class="filters" id="filters-jobs" hidden>
-                <select class="field" id="f-date">
-                  <option value="">Any date posted</option>
-                  <option value="past-24h">Past 24 hours</option>
-                  <option value="past-week">Past week</option>
-                  <option value="past-month">Past month</option>
-                </select>
-                <select class="field" id="f-exp">
-                  <option value="">Any experience level</option>
-                  <option value="internship">Internship</option>
-                  <option value="entry">Entry level</option>
-                  <option value="associate">Associate</option>
-                  <option value="mid-senior">Mid-Senior</option>
-                  <option value="director">Director</option>
-                  <option value="executive">Executive</option>
-                </select>
-                <label class="check"><input type="checkbox" id="f-remote" /> Remote only</label>
-                <label class="check"><input type="checkbox" id="f-easy" /> Easy Apply only</label>
-              </div>
-
-              <div class="row2">
-                <button class="btn" id="btn-search" type="button">Search</button>
-                <button class="btn ghost" id="btn-export" type="button" disabled>Export CSV</button>
-              </div>
-              <div class="results" id="search-results"></div>
-            </div>
-          </details>
-
           <!-- Daily action limits (safety caps) -->
-          <details class="block" id="quota-block">
+          <details class="block" id="quota-block" open>
             <summary>
-              <span>Daily limits</span>
+              <span>Today’s Activity</span>
               <span class="chev">›</span>
             </summary>
             <div class="block-body"><div class="quota-list" id="quota-list"></div></div>
           </details>
-
-          <!-- Navigation rail (drives the embedded browser) -->
-          <div class="sec-label">Navigate</div>
-          <button class="nav-item" data-url="https://www.linkedin.com/feed/">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V20h14V9.5"/></svg>
-            Feed
-          </button>
-          <button class="nav-item" data-url="https://www.linkedin.com/mynetwork/">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="9.5" r="2.3"/><path d="M3.5 19c0-3 2.5-5 5.5-5s5.5 2 5.5 5"/><path d="M15.5 19c0-2 1-3.6 2.8-4.2"/></svg>
-            My Network
-          </button>
-          <button class="nav-item" data-url="https://www.linkedin.com/jobs/">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V5.5A1.5 1.5 0 0 1 9.5 4h5A1.5 1.5 0 0 1 16 5.5V7"/></svg>
-            Jobs
-          </button>
-          <button class="nav-item" data-url="https://www.linkedin.com/messaging/">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 5h16v11H8l-4 3.5z"/></svg>
-            Messaging
-          </button>
-          <button class="nav-item" data-url="https://www.linkedin.com/notifications/">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 9a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10 19a2 2 0 0 0 4 0"/></svg>
-            Notifications
-          </button>
-          <button class="nav-item" data-url="https://www.linkedin.com/in/me/">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="3.2"/><path d="M5 20c0-3.5 3-6 7-6s7 2.5 7 6"/></svg>
-            My Profile
-          </button>
 
           <!-- Session -->
           <div class="sec-label">Session</div>
@@ -468,7 +386,7 @@
           <!-- Activity -->
           <details class="block" open>
             <summary>
-              <span>Activity</span>
+              <span>Live Activity</span>
               <button class="btn ghost" id="btn-clear" type="button" style="padding:2px 8px;font-size:10px;flex:none">Clear</button>
             </summary>
             <div class="block-body"><pre id="log" aria-live="polite"></pre></div>
