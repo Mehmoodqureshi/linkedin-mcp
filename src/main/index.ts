@@ -198,15 +198,23 @@ function createWindow(): BrowserWindow {
     return { action: 'deny' };
   });
 
+  // Standalone React "Connect Your LinkedIn" screen. When LINKEDIN_CONNECT_UI=1
+  // we render that page instead of the control panel and skip docking the
+  // embedded BrowserView (which would otherwise cover the screen).
+  const connectUi = process.env.LINKEDIN_CONNECT_UI === '1';
+
   // Dock the native LinkedIn BrowserView into this window once the UI is up.
   // attach() creates the view, navigates it to LinkedIn, then attaches the
   // Playwright driver over CDP — so the right pane is a real, interactive
   // browser, not a screencast. NOTE: the renderer must have finished loading
   // before the driver connects (a blank host target churns and wedges
   // connectOverCDP), so we attach on 'ready-to-show', which fires post-load.
-  embedded?.setWindow(win);
+  if (!connectUi) {
+    embedded?.setWindow(win);
+  }
   win.once('ready-to-show', () => {
     win.show();
+    if (connectUi) return;
     void embedded?.attach().catch((err) => {
       process.stderr.write(`[main] embedded attach failed: ${String(err)}\n`);
     });
@@ -231,7 +239,8 @@ function createWindow(): BrowserWindow {
   if (isDev && devServerUrl) {
     void win.loadURL(devServerUrl);
   } else {
-    void win.loadFile(join(__dirname, '../renderer/index.html'));
+    const page = connectUi ? 'connect.html' : 'index.html';
+    void win.loadFile(join(__dirname, `../renderer/${page}`));
   }
 
   mainWindow = win;

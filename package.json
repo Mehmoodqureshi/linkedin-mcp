@@ -30,10 +30,14 @@
     "start": "electron .",
     "mcp": "node dist/cli.js",
     "build": "tsc -p tsconfig.json && npm run build:renderer",
-    "build:renderer": "tsc -p tsconfig.renderer.json && npm run copy:renderer",
+    "build:renderer": "tsc -p tsconfig.renderer.json && npm run copy:renderer && npm run build:react",
     "copy:renderer": "node -e \"const fs=require('fs');fs.mkdirSync('dist/renderer',{recursive:true});fs.copyFileSync('src/renderer/index.html','dist/renderer/index.html')\"",
+    "build:react": "esbuild src/renderer/react/main.tsx --bundle --minify --format=iife --target=chrome120 --outfile=dist/renderer/connect.js && npm run copy:connect",
+    "copy:connect": "node -e \"const fs=require('fs');fs.mkdirSync('dist/renderer',{recursive:true});fs.copyFileSync('src/renderer/react/connect.html','dist/renderer/connect.html')\"",
+    "typecheck:react": "tsc -p tsconfig.react.json",
     "build:watch": "tsc -p tsconfig.json --watch",
     "dev": "ts-node --project tsconfig.json src/main/index.ts",
+    "start:connect": "LINKEDIN_CONNECT_UI=1 electron .",
     "clean": "rimraf dist",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "typecheck:test": "tsc -p tsconfig.test.json",
@@ -53,12 +57,17 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",
     "playwright": "^1.49.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
     "zod": "^3.24.1"
   },
   "devDependencies": {
     "@types/node": "^20.17.10",
+    "@types/react": "^18.3.30",
+    "@types/react-dom": "^18.3.7",
     "electron": "^28.3.3",
     "electron-builder": "^24.13.3",
+    "esbuild": "^0.28.0",
     "rimraf": "^5.0.10",
     "ts-node": "^10.9.2",
     "typescript": "^5.7.2"
