@@ -37,19 +37,19 @@ const OPTIONS: OptionConfig[] = [
     method: 'chrome-extension',
     icon: <ChromeLogo />,
     title: 'Chrome Extension',
-    subtitle: 'Unlock the full power of Orbit',
+    subtitle: 'Unlock the full power of LinkedIn-mcp',
     tag: { label: 'Auto', variant: 'auto' },
   },
   {
     method: 'credentials',
     icon: <LinkedInLogo />,
     title: 'LinkedIn Credentials',
-    subtitle: 'Unlock the full power of Orbit',
+    subtitle: 'Unlock the full power of LinkedIn-mcp',
     tag: { label: 'Manual', variant: 'manual' },
   },
 ];
 
-export function ConnectLinkedIn({ onSelect, brandName = 'Orbit' }: ConnectLinkedInProps): JSX.Element {
+export function ConnectLinkedIn({ onSelect, brandName = 'mehmoodqureshi/LinkedIn-mcp' }: ConnectLinkedInProps): JSX.Element {
   return (
     <div className="rw-screen">
       <header className="rw-header">
@@ -105,20 +105,11 @@ export default ConnectLinkedIn;
 /* ------------------------------------------------------------------ */
 
 function BrandMark(): JSX.Element {
-  // Orbit glyph: a core node, an elliptical orbit ring, and a satellite.
+  // Link/chain glyph — two interlocking links for "LinkedIn-mcp".
   return (
     <svg className="rw-brand__mark" width="30" height="30" viewBox="0 0 30 30" fill="none" aria-hidden="true">
-      <ellipse
-        cx="15"
-        cy="15"
-        rx="13"
-        ry="6.5"
-        transform="rotate(-35 15 15)"
-        stroke="#378FE9"
-        strokeWidth="2.2"
-      />
-      <circle cx="15" cy="15" r="4" fill="#378FE9" />
-      <circle cx="24.5" cy="8.2" r="2.6" fill="#D6D8DA" />
+      <rect x="3" y="11" width="15" height="8" rx="4" stroke="#378FE9" strokeWidth="2.4" />
+      <rect x="12" y="11" width="15" height="8" rx="4" stroke="#378FE9" strokeWidth="2.4" />
     </svg>
   );
 }
