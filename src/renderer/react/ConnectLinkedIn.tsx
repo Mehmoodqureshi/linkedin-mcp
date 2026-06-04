@@ -20,7 +20,7 @@ export type ConnectMethod = 'chrome-extension' | 'credentials';
 export interface ConnectLinkedInProps {
   /** Fired when the user picks a connection method. */
   onSelect?: (method: ConnectMethod) => void;
-  /** Header brand label. Defaults to the frame's "Reachwise". */
+  /** Header brand label. */
   brandName?: string;
 }
 
@@ -37,19 +37,19 @@ const OPTIONS: OptionConfig[] = [
     method: 'chrome-extension',
     icon: <ChromeLogo />,
     title: 'Chrome Extension',
-    subtitle: 'Unlock the full power of Reachwise',
+    subtitle: 'Unlock the full power of Orbit',
     tag: { label: 'Auto', variant: 'auto' },
   },
   {
     method: 'credentials',
     icon: <LinkedInLogo />,
     title: 'LinkedIn Credentials',
-    subtitle: 'Unlock the full power of Reachwise',
+    subtitle: 'Unlock the full power of Orbit',
     tag: { label: 'Manual', variant: 'manual' },
   },
 ];
 
-export function ConnectLinkedIn({ onSelect, brandName = 'Reachwise' }: ConnectLinkedInProps): JSX.Element {
+export function ConnectLinkedIn({ onSelect, brandName = 'Orbit' }: ConnectLinkedInProps): JSX.Element {
   return (
     <div className="rw-screen">
       <header className="rw-header">
@@ -105,10 +105,20 @@ export default ConnectLinkedIn;
 /* ------------------------------------------------------------------ */
 
 function BrandMark(): JSX.Element {
+  // Orbit glyph: a core node, an elliptical orbit ring, and a satellite.
   return (
-    <svg className="rw-brand__mark" width="28" height="26" viewBox="0 0 28 26" fill="none" aria-hidden="true">
-      <path d="M3 23V3h11a6 6 0 0 1 0 12H8" stroke="#378FE9" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M13 15l8 8" stroke="#378FE9" strokeWidth="3.2" strokeLinecap="round" />
+    <svg className="rw-brand__mark" width="30" height="30" viewBox="0 0 30 30" fill="none" aria-hidden="true">
+      <ellipse
+        cx="15"
+        cy="15"
+        rx="13"
+        ry="6.5"
+        transform="rotate(-35 15 15)"
+        stroke="#378FE9"
+        strokeWidth="2.2"
+      />
+      <circle cx="15" cy="15" r="4" fill="#378FE9" />
+      <circle cx="24.5" cy="8.2" r="2.6" fill="#D6D8DA" />
     </svg>
   );
 }
