@@ -23,7 +23,7 @@
  * LinkedIn; `attach()` creates the view and then kicks the driver's lazy launch.
  */
 
-import { BrowserView, type BrowserWindow, ipcMain, session, shell } from 'electron';
+import { BrowserView, BrowserWindow, ipcMain, session, shell } from 'electron';
 
 import type { LinkedInDriver } from '../driver/linkedin';
 
@@ -124,6 +124,16 @@ export class EmbeddedBrowser {
     ipcMain.handle('browser:bounds', (_e, b: unknown) =>
       this.safe(() => this.setBounds(b as Bounds)),
     );
+    // Open LinkedIn's own login page in a dedicated window and report whether
+    // the user ended up authenticated. Returns the richer { authenticated }
+    // shape, so it's handled outside safe()'s {ok,error} envelope.
+    ipcMain.handle('linkedin:open-login', async () => {
+      try {
+        return await this.openLoginWindow();
+      } catch (err) {
+        return { authenticated: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    });
   }
 
   public unregisterIpc(): void {
@@ -136,6 +146,7 @@ export class EmbeddedBrowser {
       'browser:reload',
       'browser:login',
       'browser:bounds',
+      'linkedin:open-login',
     ]) {
       ipcMain.removeHandler(ch);
     }
@@ -296,6 +307,68 @@ export class EmbeddedBrowser {
   }
 
   // -- Navigation -----------------------------------------------------------
+
+  /**
+   * Open LinkedIn's OWN login page in a dedicated in-app window. The user types
+   * their credentials directly on linkedin.com — so 2FA / Google SSO work and we
+   * never see the password — and the persistent partition (`persist:linkedin`)
+   * stores the resulting session, shared with the docked driver view. Resolves
+   * once the user reaches the logged-in app (feed/home) or closes the window.
+   */
+  public openLoginWindow(): Promise<{ authenticated: boolean }> {
+    return new Promise((resolve) => {
+      const parent = this.win && !this.win.isDestroyed() ? this.win : undefined;
+      const loginWin = new BrowserWindow({
+        width: 500,
+        height: 680,
+        ...(parent ? { parent } : {}),
+        title: 'Sign in to LinkedIn',
+        autoHideMenuBar: true,
+        backgroundColor: '#ffffff',
+        webPreferences: {
+          partition: SESSION_PARTITION,
+          sandbox: true,
+          contextIsolation: true,
+          nodeIntegration: false,
+        },
+      });
+
+      const wc = loginWin.webContents;
+      wc.setUserAgent(PINNED_USER_AGENT);
+      try {
+        session.fromPartition(SESSION_PARTITION).setUserAgent(PINNED_USER_AGENT);
+      } catch {
+        /* non-fatal */
+      }
+      // Allow identity-provider popups ("Continue with Google", etc.); push any
+      // other popup to the system browser.
+      wc.setWindowOpenHandler(({ url }) => {
+        if (isAuthPopupUrl(url)) return { action: 'allow' };
+        void shell.openExternal(url).catch(() => {});
+        return { action: 'deny' };
+      });
+
+      let settled = false;
+      const finish = (authenticated: boolean): void => {
+        if (settled) return;
+        settled = true;
+        resolve({ authenticated });
+        if (!loginWin.isDestroyed()) loginWin.close();
+      };
+
+      // A logged-in member lands on the feed / profile / network home; treat
+      // reaching any of those as a successful sign-in. /login and /checkpoint
+      // (2FA) are NOT success — we keep waiting until they clear.
+      const onNav = (_e: unknown, url: string): void => {
+        if (/linkedin\.com\/(feed|in\/|mynetwork|home|sales|jobs)/i.test(url)) finish(true);
+      };
+      wc.on('did-navigate', onNav);
+      wc.on('did-navigate-in-page', onNav);
+      loginWin.on('closed', () => finish(false));
+
+      wc.loadURL(LOGIN_URL).catch(() => {});
+    });
+  }
 
   private async navigate(url: string): Promise<void> {
     await this.attach();

@@ -18,32 +18,32 @@ const bridge = (window as unknown as { linkedinMCP?: McpBridge }).linkedinMCP;
 const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 /**
- * Open LinkedIn's login in the in-app browser and wait for an authenticated
- * session, returning the connected account label. Falls back to a simulated
- * connection when the bridge isn't available (e.g. the standalone connect-UI
- * preview, where the embedded BrowserView isn't docked).
+ * Open LinkedIn's OWN login page in a dedicated in-app window (the user enters
+ * their credentials directly on linkedin.com). Resolves with the connected
+ * account label once authenticated, or rejects if the user closes the window
+ * without signing in. Falls back to a simulated connection only when the bridge
+ * isn't available at all (pure design preview opened outside the app).
  */
 async function signInToLinkedIn(): Promise<string | undefined> {
   if (!bridge?.invoke) {
     await delay(1300);
     return undefined;
   }
-  try {
-    await bridge.invoke('browser:login');
-    for (let i = 0; i < 16; i += 1) {
-      const status = (await bridge.invoke('linkedin:auth-status')) as
-        | { status?: string; loggedIn?: boolean; account?: string; name?: string }
-        | undefined;
-      const ok =
-        status?.status === 'authenticated' || status?.loggedIn === true || Boolean(status?.account);
-      if (ok) return status?.account ?? status?.name ?? undefined;
-      await delay(750);
-    }
-  } catch {
-    /* fall through to simulated success so onboarding can still proceed */
+  const result = (await bridge.invoke('linkedin:open-login')) as
+    | { authenticated?: boolean }
+    | undefined;
+  if (!result?.authenticated) {
+    throw new Error('sign-in cancelled');
   }
-  await delay(400);
-  return undefined;
+  // Best-effort: surface the member's name if the driver can report it.
+  try {
+    const status = (await bridge.invoke('linkedin:auth-status')) as
+      | { account?: string; name?: string }
+      | undefined;
+    return status?.account ?? status?.name ?? undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export function OnboardingFlow(): JSX.Element {
