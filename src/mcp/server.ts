@@ -19,6 +19,9 @@
  * protocol. All diagnostics therefore go to stderr.
  */
 
+import net from 'node:net';
+import { existsSync, unlinkSync } from 'node:fs';
+
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 
@@ -155,4 +158,76 @@ export async function stopMcpServer(): Promise<void> {
 /** Whether the MCP server is currently connected and serving. */
 export function isMcpServerRunning(): boolean {
   return server !== null;
+}
+
+// ---------------------------------------------------------------------------
+// Socket server — lets a SECOND (MCP-mode) process bridge into THIS running
+// instance so Claude Desktop drives the same in-app browser.
+// ---------------------------------------------------------------------------
+// The desktop (UI-mode) instance owns the single-instance lock and the in-app
+// BrowserView. When Claude Desktop spawns the binary in MCP mode it can't get
+// the lock; instead of quitting, that process connects here and pipes its stdio.
+// We serve a FRESH MCP Server per connection over the socket (a net.Socket is a
+// duplex stream, so StdioServerTransport(socket, socket) just works), all of
+// which dispatch to the same shared driver singleton — i.e. the visible view.
+
+let socketServer: net.Server | null = null;
+const socketConnections = new Set<net.Socket>();
+
+/**
+ * Start a local IPC server at `socketPath` (a Unix socket / Windows named pipe).
+ * Idempotent. Each inbound connection gets its own MCP Server + transport.
+ */
+export async function startMcpSocketServer(socketPath: string): Promise<void> {
+  if (socketServer) return;
+
+  // Clear a stale socket file from an unclean prior shutdown.
+  try {
+    if (existsSync(socketPath)) unlinkSync(socketPath);
+  } catch {
+    /* best effort */
+  }
+
+  const srvNet = net.createServer((socket) => {
+    socketConnections.add(socket);
+    const mcp = createServer();
+    const tx = new StdioServerTransport(socket, socket);
+    mcp.connect(tx).catch((err) => {
+      logErr(`socket transport connect failed: ${String(err)}`);
+    });
+    const cleanup = (): void => {
+      socketConnections.delete(socket);
+      void mcp.close().catch(() => undefined);
+    };
+    socket.on('close', cleanup);
+    socket.on('error', cleanup);
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    srvNet.once('error', reject);
+    srvNet.listen(socketPath, () => {
+      srvNet.removeListener('error', reject);
+      resolve();
+    });
+  });
+
+  socketServer = srvNet;
+  logErr(`MCP socket server listening at ${socketPath}`);
+}
+
+/** Stop the socket server and drop every bridged connection. Idempotent. */
+export async function stopMcpSocketServer(): Promise<void> {
+  const srvNet = socketServer;
+  socketServer = null;
+  for (const conn of socketConnections) {
+    try {
+      conn.destroy();
+    } catch {
+      /* ignore */
+    }
+  }
+  socketConnections.clear();
+  if (srvNet) {
+    await new Promise<void>((resolve) => srvNet.close(() => resolve()));
+  }
 }

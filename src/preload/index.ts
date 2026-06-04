@@ -38,19 +38,39 @@ const INVOKE_CHANNELS = [
   'linkedin:send-message',
   'linkedin:read-feed',
   'linkedin:notifications',
+  'linkedin:quota',
   'mcp:status',
+  'mcp:tools',
+  'mcp:config',
+  // Native embedded-browser controls (no screencast — the view is real).
+  'browser:attach',
+  'browser:detach',
+  'browser:navigate',
+  'browser:back',
+  'browser:forward',
+  'browser:reload',
+  'browser:login',
+  'browser:bounds',
 ] as const;
+
+/** One-way (fire-and-forget) channels. */
+const SEND_CHANNELS = [] as const;
 
 const EVENT_CHANNELS = [
   'driver:status-changed',
   'mcp:status-changed',
   'action:log',
+  // Embedded-browser chrome (URL bar + load spinner).
+  'browser:url',
+  'browser:loading',
 ] as const;
 
 type InvokeChannel = (typeof INVOKE_CHANNELS)[number];
+type SendChannel = (typeof SEND_CHANNELS)[number];
 type EventChannel = (typeof EVENT_CHANNELS)[number];
 
 const invokeSet = new Set<string>(INVOKE_CHANNELS);
+const sendSet = new Set<string>(SEND_CHANNELS);
 const eventSet = new Set<string>(EVENT_CHANNELS);
 
 // ---------------------------------------------------------------------------
@@ -67,6 +87,18 @@ const api = {
       return Promise.reject(new Error(`Blocked invoke on disallowed channel: ${channel}`));
     }
     return ipcRenderer.invoke(channel, ...args);
+  },
+
+  /**
+   * Fire-and-forget message to main on an allow-listed one-way channel. Used
+   * for high-frequency embedded-browser input (mouse moves, keystrokes) where a
+   * request/response round-trip would add needless latency.
+   */
+  send(channel: SendChannel, payload: unknown): void {
+    if (!sendSet.has(channel)) {
+      throw new Error(`Blocked send on disallowed channel: ${channel}`);
+    }
+    ipcRenderer.send(channel, payload);
   },
 
   /**

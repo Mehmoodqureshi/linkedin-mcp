@@ -13,9 +13,13 @@
  * `needs_login` error rather than an exception.
  */
 
-import { ipcMain } from 'electron';
+import { app, ipcMain } from 'electron';
 
 import type { LinkedInDriver } from '../driver/linkedin';
+import type { PeopleFilters, JobFilters } from '../driver/actions/search';
+import { getQuotaManager } from '../driver/quota';
+import { TOOL_DEFINITIONS } from '../mcp/tools';
+import { buildClaudeDesktopConfig } from '../mcp/claude-desktop-config';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -57,7 +61,10 @@ const CHANNELS = [
   'linkedin:send-message',
   'linkedin:read-feed',
   'linkedin:notifications',
+  'linkedin:quota',
   'mcp:status',
+  'mcp:tools',
+  'mcp:config',
 ] as const;
 
 // ---------------------------------------------------------------------------
@@ -136,19 +143,23 @@ export function registerIpcHandlers(ctx: IpcContext): void {
 
   ipcMain.handle(
     'linkedin:search-people',
-    (_evt, payload: { query: string }) =>
-      guard(() => ctx.getDriver().search.searchPeople(payload.query)),
+    (_evt, payload: { query: string; filters?: PeopleFilters }) =>
+      guard(() =>
+        ctx.getDriver().search.searchPeople(payload.query, payload.filters),
+      ),
   );
 
   ipcMain.handle(
     'linkedin:search-jobs',
-    (_evt, payload: { query: string; location?: string }) =>
-      guard(() =>
-        ctx.getDriver().search.searchJobs(
-          payload.query,
-          payload.location ? { location: payload.location } : undefined,
-        ),
-      ),
+    (_evt, payload: { query: string; location?: string; filters?: JobFilters }) =>
+      guard(() => {
+        // Back-compat: a bare `location` still works; an explicit `filters`
+        // object (with location, remote, experienceLevel, datePosted, easyApply)
+        // takes precedence when present.
+        const filters: JobFilters | undefined =
+          payload.filters ?? (payload.location ? { location: payload.location } : undefined);
+        return ctx.getDriver().search.searchJobs(payload.query, filters);
+      }),
   );
 
   ipcMain.handle(
@@ -179,9 +190,31 @@ export function registerIpcHandlers(ctx: IpcContext): void {
     guard(() => ctx.getDriver().feed.getNotifications(payload?.limit)),
   );
 
-  // -- MCP status (read-only) ----------------------------------------------
+  // Today's mutating-action usage vs the daily safety caps.
+  ipcMain.handle('linkedin:quota', () => guard(() => getQuotaManager().snapshot()));
+
+  // -- MCP status + catalog (read-only) ------------------------------------
 
   ipcMain.handle('mcp:status', () => guard(() => ctx.getMcpStatus()));
+
+  // The advertised tool catalog (name + description + input schema), so the
+  // renderer can show what this MCP server exposes without re-declaring it.
+  ipcMain.handle('mcp:tools', () =>
+    guard(() =>
+      TOOL_DEFINITIONS.map((t) => ({
+        name: t.name,
+        description: t.description,
+        params: Object.keys(
+          (t.inputSchema as { properties?: Record<string, unknown> }).properties ?? {},
+        ),
+      })),
+    ),
+  );
+
+  // The Claude Desktop config snippet a user pastes to connect this server.
+  ipcMain.handle('mcp:config', () =>
+    guard(() => buildClaudeDesktopConfig(app.getAppPath())),
+  );
 }
 
 export function unregisterIpcHandlers(): void {

@@ -7,6 +7,13 @@
         "LINKEDIN_MCP_STDIO": "1",
         "LINKEDIN_USER_DATA_DIR": "/Users/mehmoodqureshi/.linkedin-mcp"
       }
+    },
+    "figma": {
+      "command": "npx",
+      "args": ["-y", "figma-developer-mcp", "--stdio"],
+      "env": {
+        "FIGMA_API_KEY": "${FIGMA_API_KEY}"
+      }
     }
   }
 }

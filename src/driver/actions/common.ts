@@ -71,6 +71,24 @@ export class NeedsLoginError extends Error {
   }
 }
 
+/**
+ * Thrown when LinkedIn interrupts with a security checkpoint / verification
+ * (CAPTCHA, "unusual activity", phone/email confirm). Distinct from
+ * NeedsLoginError: the session is valid, the user just has to clear a human
+ * challenge. Because the in-app browser is interactive, the right response is to
+ * surface this so the user solves it IN THE PANE, then retries — not to treat it
+ * as a logged-out state.
+ */
+export class CheckpointError extends Error {
+  readonly code = 'needs_verification';
+  constructor(
+    message = 'LinkedIn needs you to verify your identity. Complete the check in the browser pane, then retry.',
+  ) {
+    super(message);
+    this.name = 'CheckpointError';
+  }
+}
+
 /** Thrown when a targeted element/page could not be found within timeout. */
 export class ActionError extends Error {
   readonly code: string;
@@ -97,13 +115,20 @@ export async function navigate(page: Page, url: string): Promise<void> {
 }
 
 /**
- * True if the current page looks like a LinkedIn auth wall (login / checkpoint /
- * "join now"). Used to convert silent redirects into a `NeedsLoginError`.
+ * True if the URL is a security checkpoint / verification challenge — the
+ * session is valid but a human challenge gates access.
+ */
+export function isCheckpointUrl(url: string): boolean {
+  return url.includes('/checkpoint') || url.includes('/challenge');
+}
+
+/**
+ * True if the current page looks like a LinkedIn auth wall (login / "join now").
+ * Checkpoints are handled separately (see {@link isCheckpointUrl}).
  */
 export function isAuthWallUrl(url: string): boolean {
   return (
     url.includes('/login') ||
-    url.includes('/checkpoint') ||
     url.includes('/authwall') ||
     url.includes('/uas/login') ||
     url.includes('signup')
@@ -111,11 +136,17 @@ export function isAuthWallUrl(url: string): boolean {
 }
 
 /**
- * Throws `NeedsLoginError` if the page has been bounced to an auth wall.
- * Call this right after a navigation to a member-only page.
+ * Guard to call right after navigating to a member-only page:
+ *   - a checkpoint redirect → {@link CheckpointError} ('needs_verification'),
+ *     so the caller can prompt the user to solve it in the pane;
+ *   - any other auth wall → {@link NeedsLoginError} ('needs_login').
  */
 export function assertAuthenticated(page: Page): void {
-  if (isAuthWallUrl(page.url())) {
+  const url = page.url();
+  if (isCheckpointUrl(url)) {
+    throw new CheckpointError();
+  }
+  if (isAuthWallUrl(url)) {
     throw new NeedsLoginError();
   }
 }

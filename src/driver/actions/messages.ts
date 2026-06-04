@@ -22,6 +22,7 @@ import {
   rateLimitDelay,
   sleep,
 } from './common';
+import { getQuotaManager } from '../quota';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -69,6 +70,9 @@ export class MessagingActions {
    * not an open profile).
    */
   async sendMessage(profileUrl: string, message: string): Promise<SendMessageResult> {
+    // Fail fast if we're already at today's message cap (before any navigation).
+    await getQuotaManager().enforce('message');
+
     const url = normalizeProfileUrl(profileUrl);
     await navigate(this.page, url);
     assertAuthenticated(this.page);
@@ -147,6 +151,9 @@ export class MessagingActions {
       await this.page.keyboard.press('Meta+Enter').catch(() => undefined);
     }
     await sleep(1500);
+
+    // Count the message only once it was actually dispatched.
+    await getQuotaManager().record('message');
 
     const conversationId = this.parseConversationId(this.page.url());
     return {

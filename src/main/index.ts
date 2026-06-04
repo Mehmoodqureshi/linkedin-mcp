@@ -22,9 +22,17 @@ import { app, BrowserWindow, Menu, Tray, nativeImage, shell, ipcMain } from 'ele
 import { join } from 'node:path';
 
 import { getInstance, type LinkedInDriver } from '../driver/linkedin';
-import { startMcpServer, stopMcpServer, isMcpServerRunning } from '../mcp/server';
+import {
+  startMcpServer,
+  stopMcpServer,
+  isMcpServerRunning,
+  startMcpSocketServer,
+  stopMcpSocketServer,
+} from '../mcp/server';
 import { registerIpcHandlers, unregisterIpcHandlers } from './ipc-handlers';
 import type { McpStatusSnapshot } from './ipc-handlers';
+import { EmbeddedBrowser } from './embedded-browser';
+import { runStdioBridge } from './mcp-bridge';
 
 // ---------------------------------------------------------------------------
 // Module-level singletons
@@ -38,6 +46,9 @@ let mainWindow: BrowserWindow | null = null;
 
 /** The system tray icon. Kept at module scope so it is not garbage collected. */
 let tray: Tray | null = null;
+
+/** Hosts the native in-app LinkedIn BrowserView docked in the right pane. */
+let embedded: EmbeddedBrowser | null = null;
 
 /**
  * Whether stdio is wired to a pipe/socket — how an MCP client (Claude Desktop)
@@ -70,6 +81,36 @@ const isMcpMode =
 const isDev = !app.isPackaged;
 
 /**
+ * In UI mode we render LinkedIn in a native in-app `BrowserView` and attach the
+ * Playwright driver to it over CDP (see EmbeddedBrowser + BrowserManager connect
+ * mode). That requires Electron's Chromium to expose a remote-debugging
+ * endpoint, which MUST be enabled via command-line switches BEFORE `app.ready`.
+ *
+ *   - `remote-debugging-port` opens the CDP server (localhost only).
+ *   - `remote-allow-origins=*` is required for Playwright's `connectOverCDP`
+ *     websocket handshake on Chromium ≥115 (otherwise it is refused).
+ *   - `disable-blink-features=AutomationControlled` trims the automation tell.
+ *
+ * We skip all of this in MCP mode, where the driver launches its own Chromium.
+ *
+ * SECURITY NOTE: the debug port lets ANY local process that finds it attach to
+ * Chromium and drive the logged-in LinkedIn session. We bind to localhost and
+ * randomize the port per launch (instead of a fixed, guessable one) to raise the
+ * bar; this still assumes the local machine is trusted, which is the same trust
+ * model as a normal browser profile on disk. An explicit LINKEDIN_CDP_PORT wins.
+ */
+const CDP_PORT =
+  Number(process.env.LINKEDIN_CDP_PORT) ||
+  // Ephemeral/private range (49152–65535), chosen fresh each launch.
+  49152 + Math.floor(Math.random() * 16000);
+const CDP_ENDPOINT = `http://127.0.0.1:${CDP_PORT}`;
+if (!isMcpMode) {
+  app.commandLine.appendSwitch('remote-debugging-port', String(CDP_PORT));
+  app.commandLine.appendSwitch('remote-allow-origins', '*');
+  app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled');
+}
+
+/**
  * Build the MCP status snapshot the renderer + tray consume. The MCP server
  * exposes only `isMcpServerRunning()`, so we derive the richer snapshot here.
  */
@@ -81,6 +122,19 @@ function getMcpStatus(): McpStatusSnapshot {
   };
 }
 
+/**
+ * Local IPC endpoint the running (UI-mode) instance serves MCP over, so an
+ * MCP-mode process spawned by Claude Desktop can bridge into it and drive the
+ * same in-app browser. Windows needs a named pipe; elsewhere a Unix socket in
+ * userData.
+ */
+function bridgeSocketPath(): string {
+  if (process.platform === 'win32') {
+    return '\\\\.\\pipe\\linkedin-mcp-bridge';
+  }
+  return join(app.getPath('userData'), 'mcp-bridge.sock');
+}
+
 // ---------------------------------------------------------------------------
 // Single-instance lock
 // ---------------------------------------------------------------------------
@@ -88,7 +142,23 @@ function getMcpStatus(): McpStatusSnapshot {
 // servers fighting over the same stdio would corrupt the protocol stream.
 
 const gotLock = app.requestSingleInstanceLock();
-if (!gotLock) {
+
+/**
+ * A second MCP-mode process (Claude Desktop) that loses the lock doesn't quit —
+ * it bridges into the already-running app instead, so Claude drives the SAME
+ * visible browser. A second UI-mode launch just focuses the existing window.
+ */
+const runAsBridge = !gotLock && isMcpMode;
+
+if (runAsBridge) {
+  // Don't init the app (no driver/window/stdio server) — just pump bytes to the
+  // primary. Wait for `whenReady` only so `app.getPath` is resolvable.
+  app.on('window-all-closed', () => {});
+  app
+    .whenReady()
+    .then(() => runStdioBridge(bridgeSocketPath(), () => app.quit()))
+    .catch(() => app.quit());
+} else if (!gotLock) {
   app.quit();
 } else {
   app.on('second-instance', () => {
@@ -106,10 +176,10 @@ function createWindow(): BrowserWindow {
   }
 
   const win = new BrowserWindow({
-    width: 900,
-    height: 700,
-    minWidth: 640,
-    minHeight: 480,
+    width: 1440,
+    height: 920,
+    minWidth: 1024,
+    minHeight: 680,
     show: false,
     title: 'LinkedIn MCP',
     backgroundColor: '#0a0a0a',
@@ -128,8 +198,18 @@ function createWindow(): BrowserWindow {
     return { action: 'deny' };
   });
 
+  // Dock the native LinkedIn BrowserView into this window once the UI is up.
+  // attach() creates the view, navigates it to LinkedIn, then attaches the
+  // Playwright driver over CDP — so the right pane is a real, interactive
+  // browser, not a screencast. NOTE: the renderer must have finished loading
+  // before the driver connects (a blank host target churns and wedges
+  // connectOverCDP), so we attach on 'ready-to-show', which fires post-load.
+  embedded?.setWindow(win);
   win.once('ready-to-show', () => {
     win.show();
+    void embedded?.attach().catch((err) => {
+      process.stderr.write(`[main] embedded attach failed: ${String(err)}\n`);
+    });
   });
 
   // Hide instead of destroy so the tray can re-show it instantly and the
@@ -246,7 +326,25 @@ function createTray(): void {
 let isQuitting = false;
 
 async function bootstrap(): Promise<void> {
-  // 1. Create the driver singleton (lazy browser launch happens inside).
+  // 0. In UI mode the browser is the native in-app BrowserView, and the driver
+  //    ATTACHES to it over CDP rather than launching its own Chromium. Point the
+  //    driver at the connect endpoint (env is read by the driver's config). The
+  //    view is a genuine headed Electron Chromium, so identity providers (Google
+  //    sign-in) accept it where they reject headless. Snappy ops: no per-op
+  //    slowMo for the interactive view. Explicit env always wins.
+  if (!isMcpMode) {
+    if (process.env.LINKEDIN_BROWSER_MODE === undefined) {
+      process.env.LINKEDIN_BROWSER_MODE = 'connect';
+    }
+    if (process.env.LINKEDIN_CDP_ENDPOINT === undefined) {
+      process.env.LINKEDIN_CDP_ENDPOINT = CDP_ENDPOINT;
+    }
+    if (process.env.LINKEDIN_SLOWMO === undefined) {
+      process.env.LINKEDIN_SLOWMO = '0';
+    }
+  }
+
+  // 1. Create the driver singleton (lazy browser attach/launch happens inside).
   driver = getInstance();
 
   // 2. Register IPC handlers, giving them access to the driver + MCP controls.
@@ -259,12 +357,31 @@ async function bootstrap(): Promise<void> {
     showWindow,
   });
 
+  // 2b. The native embedded browser — only meaningful in UI mode, but the IPC
+  //     surface is harmless to register either way.
+  embedded = new EmbeddedBrowser(() => {
+    if (!driver) throw new Error('Driver not initialized');
+    return driver;
+  }, !isMcpMode);
+  embedded.registerIpc();
+
   // 3. Boot the MCP stdio server. In MCP mode this binds stdin/stdout to the
   //    @modelcontextprotocol/sdk Server immediately so Claude Desktop can talk
   //    to us. In UI mode we still start it (idempotent) so the renderer can
   //    report connection status. The MCP tool layer resolves its own driver
   //    singleton via getInstance(), so no driver is threaded through here.
   await startMcpServer();
+
+  // UI-mode primary also serves MCP over a local socket so a Claude-Desktop MCP
+  // process can bridge in and drive THIS visible browser (see mcp-bridge.ts).
+  // Non-fatal if it fails — the desktop app still works standalone.
+  if (!isMcpMode) {
+    try {
+      await startMcpSocketServer(bridgeSocketPath());
+    } catch (err) {
+      process.stderr.write(`[main] MCP socket server failed to start: ${String(err)}\n`);
+    }
+  }
   refreshTrayMenu();
 
   // 4. Tray is always present (both modes).
@@ -277,21 +394,25 @@ async function bootstrap(): Promise<void> {
   }
 }
 
-app.whenReady().then(bootstrap).catch((err) => {
-  // Never write human-readable text to stdout in MCP mode — it would corrupt
-  // the JSON-RPC stream. Route everything to stderr.
-  process.stderr.write(`[main] fatal during bootstrap: ${String(err)}\n`);
-  app.quit();
-});
+// Bridge processes never bootstrap the app (no driver/window/stdio server) —
+// they only pump bytes to the primary, wired up in the single-instance block.
+if (!runAsBridge) {
+  app.whenReady().then(bootstrap).catch((err) => {
+    // Never write human-readable text to stdout in MCP mode — it would corrupt
+    // the JSON-RPC stream. Route everything to stderr.
+    process.stderr.write(`[main] fatal during bootstrap: ${String(err)}\n`);
+    app.quit();
+  });
 
-app.on('activate', () => {
-  // macOS: re-create / re-show the window when the dock icon is clicked.
-  if (BrowserWindow.getAllWindows().length === 0) {
-    createWindow();
-  } else {
-    showWindow();
-  }
-});
+  app.on('activate', () => {
+    // macOS: re-create / re-show the window when the dock icon is clicked.
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createWindow();
+    } else {
+      showWindow();
+    }
+  });
+}
 
 app.on('window-all-closed', () => {
   // Do NOT quit when all windows are closed: we keep running as a background
@@ -308,7 +429,10 @@ app.on('will-quit', (event) => {
   event.preventDefault();
   void (async () => {
     try {
+      embedded?.unregisterIpc();
+      embedded?.destroy();
       unregisterIpcHandlers();
+      await stopMcpSocketServer();
       await stopMcpServer();
       await driver?.close();
     } catch (err) {

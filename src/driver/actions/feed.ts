@@ -22,6 +22,7 @@ import {
   resolveLinkedInUrl,
   sleep,
 } from './common';
+import { getQuotaManager } from '../quota';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -322,6 +323,9 @@ export class FeedActions {
     postUrl: string,
     reaction: ReactionType = 'like',
   ): Promise<ReactionResult> {
+    // Fail fast if we're already at today's reaction cap (before any navigation).
+    await getQuotaManager().enforce('reaction');
+
     const url = resolveLinkedInUrl(postUrl);
     await navigate(this.page, url);
     assertAuthenticated(this.page);
@@ -414,6 +418,9 @@ export class FeedActions {
       };
     }
 
+    // Count the reaction only once it verifiably applied.
+    await getQuotaManager().record('reaction');
+
     return {
       success: true,
       reaction,
@@ -452,6 +459,9 @@ export class FeedActions {
    * commentable or the composer/submit control cannot be found.
    */
   async commentOnPost(postUrl: string, text: string): Promise<CommentResult> {
+    // Fail fast if we're already at today's comment cap (before any navigation).
+    await getQuotaManager().enforce('comment');
+
     const url = resolveLinkedInUrl(postUrl);
     await navigate(this.page, url);
     assertAuthenticated(this.page);
@@ -522,6 +532,9 @@ export class FeedActions {
           'Comment may not have posted — the composer still contains text.',
       };
     }
+
+    // Count the comment only once it verifiably posted.
+    await getQuotaManager().record('comment');
 
     return { success: true, message: 'Comment posted.' };
   }

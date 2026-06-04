@@ -34,10 +34,15 @@ import { EventEmitter } from 'node:events';
 import { existsSync, readlinkSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { chromium, type BrowserContext, type Page } from 'playwright';
+import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
 
 /** Chromium singleton lock files written into a persistent profile directory. */
 const SINGLETON_FILES = ['SingletonLock', 'SingletonSocket', 'SingletonCookie'];
+
+/** Small async sleep used while polling for the in-app page target. */
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 /**
  * Inspect a profile's `SingletonLock` (a `<host>-<pid>` symlink Chromium writes)
@@ -121,8 +126,29 @@ const STEALTH_INIT_SCRIPT = `
   Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
 `;
 
+/**
+ * How the manager obtains its Chromium:
+ *   - 'launch'  — spawn a dedicated Playwright Chromium via
+ *                 `launchPersistentContext` (the MCP / npx / headless path).
+ *   - 'connect' — attach over CDP to a Chromium we did NOT launch (the Electron
+ *                 in-app `BrowserView`). There is exactly one page (the view);
+ *                 the browser's lifecycle is owned by Electron, not by us, so we
+ *                 must never close it.
+ */
+export type BrowserMode = 'launch' | 'connect';
+
+/** Hosts considered "LinkedIn" when locating the in-app page in connect mode. */
+const LINKEDIN_HOST_RE = /(^|\.)linkedin\.com$/i;
+
 /** Tunable launch knobs. The defaults match the project's brief. */
 export interface BrowserManagerOptions {
+  /** Acquisition strategy. Default 'launch'. */
+  mode?: BrowserMode;
+  /**
+   * CDP endpoint to attach to in 'connect' mode, e.g. `http://127.0.0.1:47872`.
+   * Ignored in 'launch' mode; required in 'connect' mode.
+   */
+  cdpEndpoint?: string;
   /** Run with a visible window. Default false per the local-app brief (user sees activity). */
   headless?: boolean;
   /** Slow each Playwright op by N ms — makes activity observable + slightly more human. */
@@ -204,6 +230,8 @@ function useBundledBrowsersIfPackaged(): void {
 // ---------------------------------------------------------------------------
 
 export class BrowserManager extends EventEmitter {
+  private readonly mode: BrowserMode;
+  private readonly cdpEndpoint: string | undefined;
   private readonly headless: boolean;
   private readonly slowMo: number;
   private readonly viewport: { width: number; height: number };
@@ -211,6 +239,14 @@ export class BrowserManager extends EventEmitter {
   private readonly userDataDir: string;
   private readonly profileDir: string;
   private readonly session: SessionManager;
+
+  /**
+   * The CDP-attached Browser handle in 'connect' mode. We keep it across
+   * `close()`/`launch()` cycles and reuse it rather than re-attaching, since the
+   * underlying Chromium (Electron's) outlives our driver. Null in 'launch' mode
+   * and before the first connect.
+   */
+  private cdpBrowser: Browser | null = null;
 
   /** The live persistent context, or null when not launched. */
   private context: BrowserContext | null = null;
@@ -226,6 +262,8 @@ export class BrowserManager extends EventEmitter {
 
   constructor(options: BrowserManagerOptions = {}) {
     super();
+    this.mode = options.mode ?? 'launch';
+    this.cdpEndpoint = options.cdpEndpoint;
     this.headless = options.headless ?? false;
     this.slowMo = options.slowMo ?? 50;
     this.viewport = options.viewport ?? { width: 1280, height: 800 };
@@ -323,8 +361,31 @@ export class BrowserManager extends EventEmitter {
   }
 
   private async doLaunch(): Promise<BrowserContext> {
+    if (this.mode === 'connect') {
+      return this.doConnect();
+    }
+
     // Resolve the bundled Chromium location before Playwright reads it.
     useBundledBrowsersIfPackaged();
+
+    // Reduce the automation fingerprint Chromium advertises.
+    const args = ['--disable-blink-features=AutomationControlled'];
+
+    // When running HEADED (the default for the embedded-mirror app), push the
+    // real Chromium window far off-screen so the user only ever sees it mirrored
+    // in the app pane — yet it stays a genuine headed browser, which third-party
+    // identity providers (e.g. Google sign-in) accept where they reject
+    // headless. The anti-throttle flags stop Chromium from pausing rendering of
+    // an off-screen/occluded window, which would otherwise freeze the screencast.
+    if (!this.headless) {
+      args.push(
+        '--window-position=-10000,-10000',
+        '--disable-backgrounding-occluded-windows',
+        '--disable-renderer-backgrounding',
+        '--disable-background-timer-throttling',
+        '--disable-features=CalculateNativeWinOcclusion',
+      );
+    }
 
     const contextOptions: PersistentContextOptions = {
       headless: this.headless,
@@ -334,8 +395,7 @@ export class BrowserManager extends EventEmitter {
       locale: this.locale,
       userAgent: PINNED_USER_AGENT,
       ignoreHTTPSErrors: false,
-      // Reduce the automation fingerprint Chromium advertises.
-      args: ['--disable-blink-features=AutomationControlled'],
+      args,
     };
 
     let context: BrowserContext;
@@ -390,11 +450,108 @@ export class BrowserManager extends EventEmitter {
     return context;
   }
 
+  // -- Connect mode (attach to Electron's in-app BrowserView over CDP) -------
+
+  /**
+   * Attach over CDP to the Chromium that Electron already runs (the in-app
+   * `BrowserView`) instead of launching our own. The action modules then drive
+   * the SAME page the user sees natively — no screencast.
+   *
+   * The connection is reused across `close()`/`launch()` cycles: Electron owns
+   * the browser's lifecycle, so we attach once and re-point at its single page.
+   * We NEVER call `cdpBrowser.close()` — that would tear down the user's app.
+   */
+  private async doConnect(): Promise<BrowserContext> {
+    if (!this.cdpEndpoint) {
+      throw new Error('BrowserManager: connect mode requires a cdpEndpoint');
+    }
+
+    // Reuse a still-live attachment; only (re)connect when we have none.
+    if (!this.cdpBrowser || !this.cdpBrowser.isConnected()) {
+      this.cdpBrowser = await chromium.connectOverCDP(this.cdpEndpoint);
+      this.cdpBrowser.on('disconnected', () => {
+        // Electron's Chromium went away (app quitting / view destroyed).
+        this.cdpBrowser = null;
+        if (this.context) {
+          this.context = null;
+          this.primaryPage = null;
+          this.emit('closed');
+        }
+      });
+    }
+
+    // connectOverCDP always surfaces a single default browser context that holds
+    // every page target (the renderer window AND the LinkedIn view).
+    const context = this.cdpBrowser.contexts()[0];
+    if (!context) {
+      throw new Error('BrowserManager: connected browser exposed no context');
+    }
+
+    // Stealth: applies to FUTURE navigations of the connected page (the already
+    // loaded document is unaffected, but that document was loaded by a genuine
+    // headed Electron Chromium with no automation switch, so navigator.webdriver
+    // is already absent — this just keeps it so as the user/agent navigates).
+    try {
+      await context.addInitScript(STEALTH_INIT_SCRIPT);
+    } catch (err) {
+      process.stderr.write(
+        `[browser] addInitScript (connect) failed (non-fatal): ${(err as Error).message}\n`,
+      );
+    }
+
+    const page = await this.findLinkedInPage(context);
+    this.context = context;
+    this.primaryPage = page;
+    this.wirePage(page);
+
+    this.emit('launched', context);
+    return context;
+  }
+
+  /**
+   * Locate the in-app LinkedIn page among the connected context's targets,
+   * skipping the control-panel renderer (a `file://`/`data:` page). The
+   * `BrowserView` is navigated to LinkedIn before we connect, but a load may be
+   * in flight, so we poll briefly.
+   */
+  private async findLinkedInPage(context: BrowserContext): Promise<Page> {
+    const host = (p: Page): string => {
+      try {
+        return new URL(p.url()).host;
+      } catch {
+        return '';
+      }
+    };
+
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const linkedin = context.pages().find((p) => LINKEDIN_HOST_RE.test(host(p)));
+      if (linkedin) return linkedin;
+      await delay(100);
+    }
+
+    // Fallback: the first page that isn't the renderer chrome. Covers the case
+    // where the view briefly sits on about:blank or a non-LinkedIn URL the user
+    // typed; once grabbed, the Page handle survives later navigations.
+    const fallback = context.pages().find((p) => {
+      const url = p.url();
+      return !!url && !/^(file|data|devtools|chrome):/i.test(url) && url !== 'about:blank';
+    });
+    if (fallback) return fallback;
+
+    throw new Error(
+      'BrowserManager: could not locate the in-app LinkedIn page over CDP (is the BrowserView attached?)',
+    );
+  }
+
   /**
    * Close the context, persisting storageState first.
    *
    * Idempotent: safe to call when already closed. We snapshot the session
    * BEFORE closing so the portable artifact reflects the final cookie state.
+   *
+   * In CONNECT mode we never tear down Electron's Chromium — we only drop our
+   * references (and keep the CDP attachment for reuse), so "stop"/"restart" from
+   * the UI re-points the driver without killing the window the user is looking at.
    */
   public async close(): Promise<void> {
     const context = this.context;
@@ -414,6 +571,12 @@ export class BrowserManager extends EventEmitter {
     // Clearing references first prevents the 'close' handler from double-emitting.
     this.context = null;
     this.primaryPage = null;
+
+    if (this.mode === 'connect') {
+      // Leave Electron's browser + our CDP attachment alone; just signal closed.
+      this.emit('closed');
+      return;
+    }
 
     try {
       await context.close();
@@ -441,6 +604,18 @@ export class BrowserManager extends EventEmitter {
    */
   public async getPage(): Promise<Page> {
     const context = await this.getContext();
+
+    // Connect mode: there is exactly ONE page — the in-app BrowserView. Never
+    // open a tab (it would be an invisible, un-mirrored page). If our handle
+    // went stale (view destroyed/recreated), re-locate the LinkedIn target.
+    if (this.mode === 'connect') {
+      if (!this.primaryPage || this.primaryPage.isClosed()) {
+        this.primaryPage = await this.findLinkedInPage(context);
+        this.wirePage(this.primaryPage);
+      }
+      return this.primaryPage;
+    }
+
     if (!this.primaryPage || this.primaryPage.isClosed()) {
       this.primaryPage = context.pages()[0] ?? (await context.newPage());
       this.wirePage(this.primaryPage);
@@ -455,8 +630,14 @@ export class BrowserManager extends EventEmitter {
    * Note: the 'page' context listener also fires 'page-created'; to avoid a
    * double emit we create the page here and rely solely on that listener, so
    * this method does not emit again itself.
+   *
+   * In CONNECT mode there is no page pool — the single in-app view IS the page,
+   * so this returns it rather than spawning an unmirrored tab.
    */
   public async newPage(): Promise<Page> {
+    if (this.mode === 'connect') {
+      return this.getPage();
+    }
     const context = await this.getContext();
     const page = await context.newPage();
     // `wirePage` + 'page-created' are handled by the context 'page' listener.

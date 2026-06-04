@@ -38,6 +38,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "typecheck:test": "tsc -p tsconfig.test.json",
     "register-mcp": "ts-node --project tsconfig.json scripts/register-mcp.ts",
+    "test:smoke": "electron test/connect-smoke.js",
     "test:hitl": "ts-node --project tsconfig.json test/hitl/index.ts",
     "test:hitl:all": "ts-node --project tsconfig.json test/hitl/index.ts --include-mutating",
     "gen-icon": "node scripts/gen-icon.js",

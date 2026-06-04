@@ -19,6 +19,7 @@ import {
   rateLimitDelay,
   sleep,
 } from './common';
+import { getQuotaManager } from '../quota';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -73,6 +74,9 @@ export class ConnectionActions {
     profileUrl: string,
     note?: string,
   ): Promise<ConnectionRequestResult> {
+    // Fail fast if we're already at today's invite cap (before any navigation).
+    await getQuotaManager().enforce('connection');
+
     const url = normalizeProfileUrl(profileUrl);
     await navigate(this.page, url);
     assertAuthenticated(this.page);
@@ -154,6 +158,9 @@ export class ConnectionActions {
     }
     await sendBtn.click();
     await sleep(1200);
+
+    // Count the invite only once it was actually dispatched.
+    await getQuotaManager().record('connection');
 
     return {
       success: true,
