@@ -23,6 +23,8 @@ interface ClientConfig {
   tag: { label: string; variant: 'auto' | 'manual' | 'accent' };
   /** Where the snippet goes / what it is. */
   hint: string;
+  /** Label for the copy button (config vs command). */
+  copyLabel: string;
   snippet: string;
 }
 
@@ -44,7 +46,8 @@ const CLIENTS: ClientConfig[] = [
     title: 'Claude Desktop',
     subtitle: 'Add to claude_desktop_config.json',
     tag: { label: 'Recommended', variant: 'auto' },
-    hint: 'Paste into your claude_desktop_config.json, then restart Claude.',
+    hint: 'Copy the config, paste it into claude_desktop_config.json, then restart Claude.',
+    copyLabel: 'Copy config',
     snippet: JSON_CONFIG,
   },
   {
@@ -53,8 +56,9 @@ const CLIENTS: ClientConfig[] = [
     title: 'Claude Code',
     subtitle: 'Register via the CLI',
     tag: { label: 'CLI', variant: 'accent' },
-    hint: 'Run this once in your terminal:',
-    snippet: `claude mcp add linkedin-driver \\\n  --env LINKEDIN_MCP_STDIO=1 \\\n  -- npx -y ${PACKAGE}`,
+    hint: 'Copy the command and run it once in your terminal.',
+    copyLabel: 'Copy command',
+    snippet: `claude mcp add linkedin-driver --env LINKEDIN_MCP_STDIO=1 -- npx -y ${PACKAGE}`,
   },
   {
     client: 'cursor',
@@ -62,7 +66,8 @@ const CLIENTS: ClientConfig[] = [
     title: 'Cursor',
     subtitle: 'Add to ~/.cursor/mcp.json',
     tag: { label: 'Manual', variant: 'manual' },
-    hint: 'Paste into ~/.cursor/mcp.json (or .cursor/mcp.json in your project).',
+    hint: 'Copy the config and paste it into ~/.cursor/mcp.json.',
+    copyLabel: 'Copy config',
     snippet: JSON_CONFIG,
   },
 ];
@@ -120,18 +125,15 @@ export function ConnectMcp({ onContinue }: ConnectMcpProps): JSX.Element {
           ))}
         </div>
 
-        <div className="rw-code">
-          <div className="rw-code__head">
-            <span>{active.hint}</span>
-            <button
-              type="button"
-              className={`rw-code__copy${copied ? ' rw-code__copy--done' : ''}`}
-              onClick={() => void copy()}
-            >
-              {copied ? '✓ Copied' : 'Copy'}
-            </button>
-          </div>
-          <pre>{active.snippet}</pre>
+        <div className="rw-copybar">
+          <span className="rw-copybar__hint">{active.hint}</span>
+          <button
+            type="button"
+            className={`rw-btn rw-btn--ghost rw-copybtn${copied ? ' rw-copybtn--done' : ''}`}
+            onClick={() => void copy()}
+          >
+            {copied ? '✓ Copied' : active.copyLabel}
+          </button>
         </div>
 
         <div className="rw-actions">

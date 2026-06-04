@@ -23,7 +23,7 @@
   position: relative;
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
+  height: 100vh;
   width: 100%;
   background: var(--rw-bg);
   color: var(--rw-text);
@@ -68,11 +68,13 @@
 
 /* ---- Main / content ---- */
 .rw-main {
-  flex: 1;
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 48px 24px;
+  padding: 32px 24px;
+  overflow: hidden;
 }
 
 .rw-content {
@@ -108,7 +110,7 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: 22px;
+  margin-bottom: 18px;
 }
 .rw-step {
   display: flex;
@@ -145,9 +147,9 @@
 .rw-options {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 14px;
   width: 100%;
-  margin-top: 30px;
+  margin-top: 22px;
 }
 
 .rw-option {
@@ -155,8 +157,8 @@
   align-items: center;
   gap: 20px;
   width: 100%;
-  min-height: 91px;
-  padding: 20px;
+  min-height: 78px;
+  padding: 16px 20px;
   background: var(--rw-surface);
   border: 1px solid var(--rw-border);
   border-radius: 12px;
@@ -190,57 +192,34 @@
 .rw-tag--manual { color: var(--rw-manual); }
 .rw-tag--accent { color: var(--rw-accent); }
 
-/* ---- Code / instructions block ---- */
-.rw-code {
-  position: relative;
-  width: 100%;
-  margin-top: 22px;
-  background: #0d0e10;
-  border: 1px solid var(--rw-border);
-  border-radius: 12px;
-  overflow: hidden;
-}
-.rw-code__head {
+/* ---- Copy bar (instructions + copy button, no code shown) ---- */
+.rw-copybar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--rw-border);
-  font-size: 13px;
-  color: var(--rw-muted);
-}
-.rw-code__copy {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  border-radius: 6px;
-  border: 1px solid var(--rw-border);
+  gap: 16px;
+  width: 100%;
+  margin-top: 20px;
+  padding: 14px 16px;
   background: var(--rw-surface);
-  color: var(--rw-text);
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
+  border: 1px solid var(--rw-border);
+  border-radius: 12px;
 }
-.rw-code__copy:hover { border-color: #2f3236; }
-.rw-code__copy--done { color: var(--rw-auto); border-color: var(--rw-auto); }
-.rw-code pre {
-  margin: 0;
-  padding: 16px;
-  overflow-x: auto;
-  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
-  font-size: 13px;
-  line-height: 1.6;
-  color: #c8d3de;
-  white-space: pre;
+.rw-copybar__hint {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--rw-muted);
+  line-height: 1.4;
 }
+.rw-copybtn { flex: 0 0 auto; padding: 9px 16px; font-size: 14px; }
+.rw-copybtn--done { color: var(--rw-auto); border-color: var(--rw-auto); }
 
 /* ---- Primary button ---- */
 .rw-actions {
   display: flex;
   justify-content: flex-end;
   width: 100%;
-  margin-top: 26px;
+  margin-top: 18px;
 }
 .rw-btn {
   display: inline-flex;
