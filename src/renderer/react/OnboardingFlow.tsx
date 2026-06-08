@@ -47,7 +47,10 @@ async function signInToLinkedIn(): Promise<string | undefined> {
 }
 
 export function OnboardingFlow(): JSX.Element {
-  const [step, setStep] = useState<Step>('mcp');
+  // The main process can deep-link into a specific step via the URL hash
+  // (e.g. connect.html#linkedin opens step 2 directly — used on logout).
+  const initialStep: Step = window.location.hash.replace(/^#/, '') === 'linkedin' ? 'linkedin' : 'mcp';
+  const [step, setStep] = useState<Step>(initialStep);
 
   if (step === 'mcp') {
     return <ConnectMcp onContinue={() => setStep('linkedin')} />;
@@ -62,6 +65,13 @@ export function OnboardingFlow(): JSX.Element {
           | { authenticated?: boolean }
           | undefined;
         return Boolean(r?.authenticated);
+      }}
+      lastAccount={async () => {
+        const r = (await bridge?.invoke?.('linkedin:last-account')) as
+          | { name?: string; avatarDataUrl?: string }
+          | null
+          | undefined;
+        return r && r.name ? { name: r.name, avatarDataUrl: r.avatarDataUrl } : null;
       }}
       logOut={async () => {
         await bridge?.invoke?.('linkedin:clear-session');

@@ -55,6 +55,15 @@ interface JobResult {
   easyApply?: boolean;
 }
 
+/** A company-search result card (subset of the driver's CompanyResult). */
+interface CompanyResult {
+  name?: string;
+  industry?: string;
+  location?: string;
+  followers?: string;
+  companyUrl?: string;
+}
+
 /** Today's usage vs cap for one mutating action. */
 interface QuotaRow {
   action: string;
@@ -73,7 +82,9 @@ type InvokeChannel =
   | 'linkedin:logout'
   | 'linkedin:search-people'
   | 'linkedin:search-jobs'
+  | 'linkedin:search-companies'
   | 'linkedin:send-connection'
+  | 'linkedin:send-message'
   | 'linkedin:quota'
   | 'mcp:status'
   | 'mcp:tools'
@@ -85,7 +96,9 @@ type InvokeChannel =
   | 'browser:forward'
   | 'browser:reload'
   | 'browser:login'
-  | 'browser:bounds';
+  | 'browser:bounds'
+  | 'linkedin:clear-session'
+  | 'app:open-connect';
 
 type EventChannel =
   | 'driver:status-changed'
@@ -117,10 +130,6 @@ function el<T extends HTMLElement>(id: string): T {
   return node as T;
 }
 
-const pillAuth = el<HTMLSpanElement>('pill-auth');
-const pillAuthDot = el<HTMLSpanElement>('pill-auth-dot');
-const pillMcp = el<HTMLSpanElement>('pill-mcp');
-const pillMcpDot = el<HTMLSpanElement>('pill-mcp-dot');
 
 const infoServer = el<HTMLDivElement>('info-server');
 const infoTransport = el<HTMLDivElement>('info-transport');
@@ -130,10 +139,8 @@ const infoBrowser = el<HTMLDivElement>('info-browser');
 const btnLogin = el<HTMLButtonElement>('btn-login');
 const btnLogout = el<HTMLButtonElement>('btn-logout');
 const btnRestart = el<HTMLButtonElement>('btn-restart');
-const btnCopy = el<HTMLButtonElement>('btn-copy');
 const btnClear = el<HTMLButtonElement>('btn-clear');
 
-const configSnippet = el<HTMLPreElement>('config-snippet');
 const toolList = el<HTMLDivElement>('tool-list');
 const toolCount = el<HTMLSpanElement>('tool-count');
 const toolFilter = el<HTMLInputElement>('tool-filter');
@@ -161,18 +168,35 @@ const searchLocation = el<HTMLInputElement>('search-location');
 const btnSearch = el<HTMLButtonElement>('btn-search');
 const btnExport = el<HTMLButtonElement>('btn-export');
 const searchResults = el<HTMLDivElement>('search-results');
+const qmName = el<HTMLInputElement>('qm-name');
+const qmText = el<HTMLTextAreaElement>('qm-text');
+const qmFind = el<HTMLButtonElement>('qm-find');
+const qmResult = el<HTMLDivElement>('qm-result');
 const segItems = Array.from(document.querySelectorAll<HTMLButtonElement>('.seg-item'));
 const filtersPeople = el<HTMLDivElement>('filters-people');
 const filtersJobs = el<HTMLDivElement>('filters-jobs');
+const filtersCompanies = el<HTMLDivElement>('filters-companies');
 // People filters
 const fTitle = el<HTMLInputElement>('f-title');
+const fLocation = el<HTMLInputElement>('f-location');
 const fCompany = el<HTMLInputElement>('f-company');
+const fPastCompany = el<HTMLInputElement>('f-past-company');
+const fIndustry = el<HTMLInputElement>('f-industry');
+const fSchool = el<HTMLInputElement>('f-school');
 const fDegree = el<HTMLSelectElement>('f-degree');
 // Job filters
 const fDate = el<HTMLSelectElement>('f-date');
 const fExp = el<HTMLSelectElement>('f-exp');
-const fRemote = el<HTMLInputElement>('f-remote');
+const fJobType = el<HTMLSelectElement>('f-jobtype');
+const fSalary = el<HTMLSelectElement>('f-salary');
+const fWorkplace = Array.from(
+  document.querySelectorAll<HTMLInputElement>('#f-workplace input[type="checkbox"]'),
+);
 const fEasy = el<HTMLInputElement>('f-easy');
+// Company filters
+const fCoLocation = el<HTMLInputElement>('f-co-location');
+const fCoIndustry = el<HTMLInputElement>('f-co-industry');
+const fCoSize = el<HTMLSelectElement>('f-co-size');
 // Daily limits
 const quotaList = el<HTMLDivElement>('quota-list');
 
@@ -242,18 +266,6 @@ async function browserCmd(channel: InvokeChannel, payload?: unknown): Promise<vo
 // ---------------------------------------------------------------------------
 
 function renderDriver(status: DriverStatus): void {
-  // Auth pill
-  pillAuthDot.classList.remove('ok', 'warn');
-  if (status.isLoggedIn) {
-    pillAuthDot.classList.add('ok');
-    pillAuth.textContent = 'signed in';
-  } else if (status.status === 'launching') {
-    pillAuthDot.classList.add('warn');
-    pillAuth.textContent = 'launching…';
-  } else {
-    pillAuth.textContent = 'signed out';
-  }
-
   const running = status.status === 'ready' || status.status === 'launching';
   infoBrowser.textContent = running ? 'running' : 'stopped';
   infoBrowser.className = `v ${running ? 'good' : 'bad'}`;
@@ -262,11 +274,6 @@ function renderDriver(status: DriverStatus): void {
 }
 
 function renderMcp(mcp: McpStatusSnapshot): void {
-  pillMcpDot.classList.toggle('ok', mcp.running);
-  pillMcp.textContent = mcp.running
-    ? `MCP · ${mcp.connectedClients} client${mcp.connectedClients === 1 ? '' : 's'}`
-    : 'MCP offline';
-
   infoServer.textContent = mcp.running ? 'running' : 'stopped';
   infoServer.className = `v ${mcp.running ? 'good' : 'bad'}`;
   infoTransport.textContent = mcp.running ? mcp.transport : 'offline';
@@ -363,12 +370,6 @@ async function loadCatalog(): Promise<void> {
   } catch (err) {
     log(`Failed to load tool catalog: ${(err as Error).message}`, 'warn');
   }
-  try {
-    configSnippet.textContent = JSON.stringify(await call<unknown>('mcp:config'), null, 2);
-  } catch (err) {
-    configSnippet.textContent = '// failed to build config snippet';
-    log(`Failed to load config snippet: ${(err as Error).message}`, 'warn');
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -397,12 +398,19 @@ for (const item of navItems) {
 // the native pane navigates to the LinkedIn results while we render clickable
 // cards here. Clicking a card opens that profile/job in the pane.
 
-type SearchMode = 'people' | 'jobs';
+type SearchMode = 'people' | 'jobs' | 'companies';
 let searchMode: SearchMode = 'people';
 
 /** Last result set, retained so "Export CSV" can serialize exactly what's shown. */
 let lastPeople: PersonResult[] = [];
 let lastJobs: JobResult[] = [];
+let lastCompanies: CompanyResult[] = [];
+
+const PLACEHOLDERS: Record<SearchMode, string> = {
+  people: 'Search people…',
+  jobs: 'Search jobs…',
+  companies: 'Search companies…',
+};
 
 for (const seg of segItems) {
   seg.addEventListener('click', () => {
@@ -410,10 +418,13 @@ for (const seg of segItems) {
     if (mode === searchMode) return;
     searchMode = mode;
     for (const s of segItems) s.classList.toggle('active', s === seg);
-    searchQuery.placeholder = mode === 'people' ? 'Search people…' : 'Search jobs…';
+    searchQuery.placeholder = PLACEHOLDERS[mode];
+    // The shared location field is jobs-only; People and Companies carry their
+    // own location inputs inside their filter blocks.
     searchLocation.hidden = mode !== 'jobs';
     filtersPeople.hidden = mode !== 'people';
     filtersJobs.hidden = mode !== 'jobs';
+    filtersCompanies.hidden = mode !== 'companies';
     searchResults.replaceChildren();
     btnExport.disabled = true;
   });
@@ -421,32 +432,64 @@ for (const seg of segItems) {
 
 btnSearch.addEventListener('click', () => void runSearch());
 btnExport.addEventListener('click', exportCsv);
+qmFind.addEventListener('click', () => void quickMessageFind());
+qmName.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') void quickMessageFind();
+});
 searchQuery.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') void runSearch();
 });
-for (const f of [searchLocation, fTitle, fCompany]) {
+for (const f of [
+  searchLocation,
+  fTitle,
+  fLocation,
+  fCompany,
+  fPastCompany,
+  fIndustry,
+  fSchool,
+  fCoLocation,
+  fCoIndustry,
+]) {
   f.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') void runSearch();
   });
 }
 
+type FilterValue = string | boolean | string[];
+
 /** Gather the active people filters into the driver's PeopleFilters shape. */
-function peopleFilters(): Record<string, string> {
-  const f: Record<string, string> = {};
+function peopleFilters(): Record<string, FilterValue> {
+  const f: Record<string, FilterValue> = {};
   if (fTitle.value.trim()) f.title = fTitle.value.trim();
+  if (fLocation.value.trim()) f.location = fLocation.value.trim();
   if (fCompany.value.trim()) f.company = fCompany.value.trim();
+  if (fPastCompany.value.trim()) f.pastCompanies = [fPastCompany.value.trim()];
+  if (fIndustry.value.trim()) f.industry = fIndustry.value.trim();
+  if (fSchool.value.trim()) f.school = fSchool.value.trim();
   if (fDegree.value) f.connectionDegree = fDegree.value;
   return f;
 }
 
 /** Gather the active job filters into the driver's JobFilters shape. */
-function jobFilters(): Record<string, string | boolean> {
-  const f: Record<string, string | boolean> = {};
+function jobFilters(): Record<string, FilterValue> {
+  const f: Record<string, FilterValue> = {};
   if (searchLocation.value.trim()) f.location = searchLocation.value.trim();
   if (fDate.value) f.datePosted = fDate.value;
   if (fExp.value) f.experienceLevel = fExp.value;
-  if (fRemote.checked) f.remote = true;
+  if (fJobType.value) f.jobType = fJobType.value;
+  if (fSalary.value) f.salary = fSalary.value;
+  const workplace = fWorkplace.filter((c) => c.checked).map((c) => c.value);
+  if (workplace.length) f.workplaceType = workplace;
   if (fEasy.checked) f.easyApply = true;
+  return f;
+}
+
+/** Gather the active company filters into the driver's CompanyFilters shape. */
+function companyFilters(): Record<string, FilterValue> {
+  const f: Record<string, FilterValue> = {};
+  if (fCoLocation.value.trim()) f.location = fCoLocation.value.trim();
+  if (fCoIndustry.value.trim()) f.industry = fCoIndustry.value.trim();
+  if (fCoSize.value) f.companySize = fCoSize.value;
   return f;
 }
 
@@ -471,7 +514,7 @@ async function runSearch(): Promise<void> {
         renderPeople(people);
         btnExport.disabled = people.length === 0;
         log(`Found ${people.length} ${people.length === 1 ? 'person' : 'people'} for “${query}”.`, 'success');
-      } else {
+      } else if (searchMode === 'jobs') {
         const filters = jobFilters();
         const jobs = await call<JobResult[]>('linkedin:search-jobs', {
           query,
@@ -481,6 +524,16 @@ async function runSearch(): Promise<void> {
         renderJobs(jobs);
         btnExport.disabled = jobs.length === 0;
         log(`Found ${jobs.length} ${jobs.length === 1 ? 'job' : 'jobs'} for “${query}”.`, 'success');
+      } else {
+        const filters = companyFilters();
+        const companies = await call<CompanyResult[]>('linkedin:search-companies', {
+          query,
+          ...(Object.keys(filters).length ? { filters } : {}),
+        });
+        lastCompanies = companies;
+        renderCompanies(companies);
+        btnExport.disabled = companies.length === 0;
+        log(`Found ${companies.length} ${companies.length === 1 ? 'company' : 'companies'} for “${query}”.`, 'success');
       }
     } catch (err) {
       searchResults.replaceChildren(emptyRow(classifySearchError(err as Error & { code?: string })));
@@ -593,6 +646,7 @@ function renderPeople(people: PersonResult[]): void {
           ? [
               { label: 'Open', run: () => void browserCmd('browser:navigate', p.profileUrl as string) },
               { label: 'Connect', primary: true, run: (b) => void connectTo(p.profileUrl as string, b) },
+              { label: 'Message', run: (b) => messageTo(p.profileUrl as string, b) },
             ]
           : [],
       ),
@@ -620,6 +674,26 @@ function renderJobs(jobs: JobResult[]): void {
   );
 }
 
+function renderCompanies(companies: CompanyResult[]): void {
+  if (!companies.length) {
+    searchResults.replaceChildren(emptyRow('No companies found.'));
+    return;
+  }
+  searchResults.replaceChildren(
+    ...companies.map((c) =>
+      resultCard(
+        c.name || '(unknown company)',
+        c.industry || '',
+        [c.location ?? '', c.followers ?? ''],
+        c.companyUrl,
+        c.companyUrl
+          ? [{ label: 'Open', run: () => void browserCmd('browser:navigate', c.companyUrl as string) }]
+          : [],
+      ),
+    ),
+  );
+}
+
 /** Send a connection request from a result card, reflecting the outcome inline. */
 async function connectTo(profileUrl: string, btn: HTMLButtonElement): Promise<void> {
   btn.disabled = true;
@@ -640,17 +714,275 @@ async function connectTo(profileUrl: string, btn: HTMLButtonElement): Promise<vo
   }
 }
 
+/**
+ * Open an inline composer on a People card and send a direct message. Messaging
+ * needs a body, so (unlike Connect) we reveal a textarea + Send rather than
+ * firing immediately. A second click just focuses the open composer.
+ */
+function messageTo(profileUrl: string, btn: HTMLButtonElement): void {
+  const card = btn.closest('.res-card');
+  if (!card) return;
+
+  const open = card.querySelector('.rc-compose') as HTMLElement | null;
+  if (open) {
+    open.querySelector('textarea')?.focus();
+    return;
+  }
+
+  const box = document.createElement('div');
+  box.className = 'rc-compose';
+
+  const ta = document.createElement('textarea');
+  ta.className = 'rc-compose-input';
+  ta.placeholder = 'Write a message…';
+  ta.rows = 3;
+  ta.maxLength = 8000;
+
+  const bar = document.createElement('div');
+  bar.className = 'rc-actions';
+  const send = document.createElement('button');
+  send.className = 'rc-btn primary';
+  send.type = 'button';
+  send.textContent = 'Send';
+  const cancel = document.createElement('button');
+  cancel.className = 'rc-btn';
+  cancel.type = 'button';
+  cancel.textContent = 'Cancel';
+  bar.append(send, cancel);
+
+  box.append(ta, bar);
+  card.appendChild(box);
+  ta.focus();
+
+  const setBusy = (busy: boolean): void => {
+    send.disabled = busy;
+    cancel.disabled = busy;
+    ta.disabled = busy;
+    send.textContent = busy ? 'Sending…' : 'Send';
+  };
+
+  cancel.addEventListener('click', () => box.remove());
+  send.addEventListener('click', () => {
+    const text = ta.value.trim();
+    if (!text) {
+      ta.focus();
+      return;
+    }
+    setBusy(true);
+    void (async () => {
+      try {
+        const res = await call<{ success: boolean; message: string }>('linkedin:send-message', {
+          profileUrl,
+          text,
+        });
+        log(res.message, res.success ? 'success' : 'warn');
+        if (res.success) {
+          box.remove();
+          btn.textContent = 'Messaged ✓';
+          btn.disabled = true;
+        } else {
+          setBusy(false);
+        }
+      } catch (err) {
+        const e = err as Error & { code?: string };
+        if (e.code === 'needs_login' || e.code === 'needs_verification' || e.code === 'quota_exceeded') {
+          classifySearchError(e); // logs the right guidance
+        } else {
+          log(`Message failed: ${e.message}`, 'error');
+        }
+        setBusy(false);
+      }
+    })();
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Message by name: search → confirm the match → send
+// ---------------------------------------------------------------------------
+
+let qmMatches: PersonResult[] = [];
+let qmIndex = 0;
+
+/** True when the input is a LinkedIn profile URL or an /in/ slug, not a name. */
+function looksLikeProfileLink(s: string): boolean {
+  return /linkedin\.com\/in\//i.test(s) || /^\/?in\//i.test(s) || /^https?:\/\//i.test(s);
+}
+
+/** Best-effort display name from a profile URL/slug, e.g. "john-doe" → "john doe". */
+function slugToName(input: string): string {
+  const m = input.match(/\/in\/([^/?#]+)/i);
+  const slug = (m?.[1] ?? input).replace(/^\/?in\//i, '').replace(/[/?#].*$/, '');
+  return slug.replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()).trim() || input;
+}
+
+/**
+ * Resolve who to message. A profile URL/slug is messaged directly (no search —
+ * this always yields a Send card even when People search returns nothing). A
+ * plain name is searched and the top match surfaced for review.
+ */
+async function quickMessageFind(): Promise<void> {
+  const input = qmName.value.trim();
+  if (!input) {
+    qmName.focus();
+    return;
+  }
+  if (!qmText.value.trim()) {
+    qmText.focus();
+    return;
+  }
+
+  // Direct path: a pasted profile link skips search entirely.
+  if (looksLikeProfileLink(input)) {
+    qmMatches = [{ name: slugToName(input), headline: input, profileUrl: input }];
+    qmIndex = 0;
+    renderQuickMatch();
+    return;
+  }
+
+  await withButton(qmFind, async () => {
+    qmFind.textContent = 'Searching…';
+    qmResult.replaceChildren(emptyRow(`Searching for “${input}”…`));
+    try {
+      const people = await call<PersonResult[]>('linkedin:search-people', { query: input });
+      qmMatches = people.filter((p) => p.profileUrl);
+      qmIndex = 0;
+      if (!qmMatches.length) {
+        qmResult.replaceChildren(
+          emptyRow(`No people found for “${input}”. Tip: paste their profile URL instead.`),
+        );
+        return;
+      }
+      renderQuickMatch();
+    } catch (err) {
+      qmResult.replaceChildren(emptyRow(classifySearchError(err as Error & { code?: string })));
+    } finally {
+      qmFind.textContent = 'Find & review';
+    }
+  });
+}
+
+/** Render the current candidate with Send / Pick another / Cancel controls. */
+function renderQuickMatch(): void {
+  const p = qmMatches[qmIndex];
+  if (!p) return;
+
+  const card = document.createElement('div');
+  card.className = 'res-card';
+
+  const t = document.createElement('div');
+  t.className = 'rc-title';
+  t.textContent = p.name || '(unknown)';
+  card.appendChild(t);
+
+  if (p.headline) {
+    const s = document.createElement('div');
+    s.className = 'rc-sub';
+    s.textContent = p.headline;
+    card.appendChild(s);
+  }
+
+  const tags = [p.location ?? '', p.connectionDegree ?? ''].filter(Boolean);
+  if (tags.length) {
+    const m = document.createElement('div');
+    m.className = 'rc-meta';
+    for (const text of tags) {
+      const tag = document.createElement('span');
+      tag.className = 'res-tag';
+      tag.textContent = text;
+      m.appendChild(tag);
+    }
+    card.appendChild(m);
+  }
+
+  const pos = document.createElement('div');
+  pos.className = 'qm-match';
+  pos.textContent = `Match ${qmIndex + 1} of ${qmMatches.length}`;
+  card.appendChild(pos);
+
+  const bar = document.createElement('div');
+  bar.className = 'rc-actions';
+  const send = document.createElement('button');
+  send.className = 'rc-btn primary';
+  send.type = 'button';
+  send.textContent = 'Send';
+  const another = document.createElement('button');
+  another.className = 'rc-btn';
+  another.type = 'button';
+  another.textContent = 'Pick another';
+  another.disabled = qmMatches.length < 2;
+  const cancel = document.createElement('button');
+  cancel.className = 'rc-btn';
+  cancel.type = 'button';
+  cancel.textContent = 'Cancel';
+  bar.append(send, another, cancel);
+  card.appendChild(bar);
+
+  qmResult.replaceChildren(card);
+
+  another.addEventListener('click', () => {
+    qmIndex = (qmIndex + 1) % qmMatches.length;
+    renderQuickMatch();
+  });
+  cancel.addEventListener('click', () => qmResult.replaceChildren());
+  send.addEventListener('click', () => {
+    const text = qmText.value.trim();
+    if (!text) {
+      qmText.focus();
+      return;
+    }
+    const setBusy = (busy: boolean): void => {
+      send.disabled = busy;
+      another.disabled = busy || qmMatches.length < 2;
+      cancel.disabled = busy;
+      send.textContent = busy ? 'Sending…' : 'Send';
+    };
+    setBusy(true);
+    void (async () => {
+      try {
+        const res = await call<{ success: boolean; message: string }>('linkedin:send-message', {
+          profileUrl: p.profileUrl as string,
+          text,
+        });
+        log(res.message, res.success ? 'success' : 'warn');
+        if (res.success) {
+          qmResult.replaceChildren(emptyRow(`Messaged ${p.name ?? 'recipient'} ✓`));
+          qmText.value = '';
+        } else {
+          setBusy(false);
+        }
+      } catch (err) {
+        const e = err as Error & { code?: string };
+        if (e.code === 'needs_login' || e.code === 'needs_verification' || e.code === 'quota_exceeded') {
+          classifySearchError(e); // logs the right guidance
+        } else {
+          log(`Message failed: ${e.message}`, 'error');
+        }
+        setBusy(false);
+      }
+    })();
+  });
+}
+
 /** Export the current result set to a CSV file the user can save. */
 function exportCsv(): void {
-  const isPeople = searchMode === 'people';
-  const headers = isPeople
-    ? ['name', 'headline', 'location', 'connectionDegree', 'profileUrl']
-    : ['title', 'company', 'location', 'postedDate', 'easyApply', 'jobUrl'];
-  const rows: string[][] = isPeople
-    ? lastPeople.map((p) => [p.name, p.headline, p.location, p.connectionDegree, p.profileUrl].map(cell))
-    : lastJobs.map((j) =>
-        [j.title, j.company, j.location, j.postedDate, j.easyApply ? 'yes' : 'no', j.jobUrl].map(cell),
-      );
+  const headers =
+    searchMode === 'people'
+      ? ['name', 'headline', 'location', 'connectionDegree', 'profileUrl']
+      : searchMode === 'jobs'
+        ? ['title', 'company', 'location', 'postedDate', 'easyApply', 'jobUrl']
+        : ['name', 'industry', 'location', 'followers', 'companyUrl'];
+  const rows: string[][] =
+    searchMode === 'people'
+      ? lastPeople.map((p) =>
+          [p.name, p.headline, p.location, p.connectionDegree, p.profileUrl].map(cell),
+        )
+      : searchMode === 'jobs'
+        ? lastJobs.map((j) =>
+            [j.title, j.company, j.location, j.postedDate, j.easyApply ? 'yes' : 'no', j.jobUrl].map(cell),
+          )
+        : lastCompanies.map((c) =>
+            [c.name, c.industry, c.location, c.followers, c.companyUrl].map(cell),
+          );
   if (!rows.length) return;
 
   const csv = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
@@ -693,15 +1025,12 @@ btnLogin.addEventListener('click', () =>
 
 btnLogout.addEventListener('click', () =>
   withButton(btnLogout, async () => {
-    log('Logging out…');
-    try {
-      await call('linkedin:logout');
-      log('Logged out.', 'success');
-      await browserCmd('browser:attach');
-      await pollStatus();
-    } catch (err) {
-      log(`Logout failed: ${(err as Error).message}`, 'error');
-    }
+    // Hand the whole sign-out to main in one shot. It detaches the docked view
+    // FIRST, then wipes the session off-screen, so the user goes straight to
+    // onboarding step 2 with no flash of the LinkedIn logout page. Keeping the
+    // teardown in main (not here) is also what makes it smooth: the heavy/slow
+    // parts run after the screen has already switched.
+    await browserCmd('app:open-connect', 'linkedin');
   }),
 );
 
@@ -719,14 +1048,109 @@ btnRestart.addEventListener('click', () =>
   }),
 );
 
-btnCopy.addEventListener('click', () => {
+btnClear.addEventListener('click', () => logEl.replaceChildren());
+
+// ---------------------------------------------------------------------------
+// Connect MCP — per-client config/command with copy (onboarding step 1)
+// ---------------------------------------------------------------------------
+
+const MCP_PACKAGE = '@mehmoodqureshi/linkedin-mcp';
+const MCP_JSON_CONFIG = `{
+  "mcpServers": {
+    "linkedin-driver": {
+      "command": "npx",
+      "args": ["-y", "${MCP_PACKAGE}"],
+      "env": { "LINKEDIN_MCP_STDIO": "1" }
+    }
+  }
+}`;
+
+interface McpClientInfo {
+  hint: string;
+  copyLabel: string;
+  snippet: string;
+}
+
+const MCP_CLIENTS: Record<string, McpClientInfo> = {
+  'claude-desktop': {
+    hint: 'Paste into claude_desktop_config.json under mcpServers, then restart Claude Desktop.',
+    copyLabel: 'Copy config',
+    snippet: MCP_JSON_CONFIG,
+  },
+  'claude-code': {
+    hint: 'Run this once in your terminal.',
+    copyLabel: 'Copy command',
+    snippet: `claude mcp add linkedin-driver --env LINKEDIN_MCP_STDIO=1 -- npx -y ${MCP_PACKAGE}`,
+  },
+  cursor: {
+    hint: 'Paste into ~/.cursor/mcp.json, then reload Cursor.',
+    copyLabel: 'Copy config',
+    snippet: MCP_JSON_CONFIG,
+  },
+};
+
+const mcpSegItems = Array.from(
+  document.querySelectorAll<HTMLButtonElement>('#mcp-seg .seg-item'),
+);
+const mcpHint = el<HTMLParagraphElement>('mcp-hint');
+const mcpSnippet = el<HTMLPreElement>('mcp-snippet');
+const mcpCopy = el<HTMLButtonElement>('mcp-copy');
+
+let mcpSelected = 'claude-desktop';
+
+function activeMcpClient(): McpClientInfo {
+  return MCP_CLIENTS[mcpSelected] ?? MCP_CLIENTS['claude-desktop']!;
+}
+
+function renderMcpClient(): void {
+  const info = activeMcpClient();
+  mcpHint.textContent = info.hint;
+  mcpSnippet.textContent = info.snippet;
+  mcpCopy.textContent = info.copyLabel;
+  for (const item of mcpSegItems) {
+    item.classList.toggle('active', item.dataset.client === mcpSelected);
+  }
+}
+
+for (const item of mcpSegItems) {
+  item.addEventListener('click', () => {
+    mcpSelected = item.dataset.client ?? 'claude-desktop';
+    renderMcpClient();
+  });
+}
+
+mcpCopy.addEventListener('click', () => {
+  const info = activeMcpClient();
   void navigator.clipboard
-    .writeText(configSnippet.textContent ?? '')
-    .then(() => log('Config snippet copied.', 'success'))
+    .writeText(info.snippet)
+    .then(() => {
+      mcpCopy.textContent = '✓ Copied';
+      log('MCP config copied.', 'success');
+      window.setTimeout(() => {
+        mcpCopy.textContent = info.copyLabel;
+      }, 1600);
+    })
     .catch(() => log('Copy failed.', 'warn'));
 });
 
-btnClear.addEventListener('click', () => logEl.replaceChildren());
+renderMcpClient();
+
+// ---------------------------------------------------------------------------
+// Sidebar sections — accordion
+// ---------------------------------------------------------------------------
+
+// Only one collapsible section may be open at a time, so an open tab always gets
+// the full rail height to scroll in. Opening one closes the rest. The Navigate
+// rail is plain buttons (not a <details>), so it's never affected.
+const sectionBlocks = Array.from(document.querySelectorAll<HTMLDetailsElement>('details.block'));
+for (const block of sectionBlocks) {
+  block.addEventListener('toggle', () => {
+    if (!block.open) return;
+    for (const other of sectionBlocks) {
+      if (other !== block) other.open = false;
+    }
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Browser toolbar

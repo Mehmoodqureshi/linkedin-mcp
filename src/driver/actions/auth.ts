@@ -270,21 +270,34 @@ export class AuthActions {
 
   /**
    * Returns true when the active session is authenticated. Fast path: a valid
-   * li_at cookie. Slow path: navigate to /feed and confirm the primary nav
-   * element rendered (i.e. we were not bounced to the auth wall).
+   * li_at cookie. Slow path: confirm the primary nav element rendered (i.e. we
+   * were not bounced to the auth wall).
+   *
+   * `navigate` (default true) controls the slow path. When false we inspect the
+   * page exactly where it sits — never issuing a goto. This is required for
+   * callers driven by navigation events (the embedded view's auth re-check):
+   * a forced /feed navigation there would fire another navigation event and
+   * loop the browser reloading endlessly.
    */
-  async isLoggedIn(): Promise<boolean> {
+  async isLoggedIn(opts: { navigate?: boolean } = {}): Promise<boolean> {
     const cookie = findLiAt(await this.context.cookies());
     if (isCookieValid(cookie)) return true;
 
     // Cookie missing/expired — verify against the live page as a fallback.
     try {
-      await navigate(this.page, `${LINKEDIN_BASE}/feed/`);
-      if (this.page.url().includes('/login') || this.page.url().includes('authwall')) {
+      if (opts.navigate !== false) {
+        await navigate(this.page, `${LINKEDIN_BASE}/feed/`);
+      }
+      const url = this.page.url();
+      if (url.includes('/login') || url.includes('authwall')) {
         return false;
       }
+      // LinkedIn hashes its class names and dropped the old #global-nav /
+      // aria-label="Primary Navigation" hooks, so key off stable href targets
+      // instead: the logged-in global nav always links to My Network / Messaging
+      // / Notifications, and logged-out pages (authwall/login) never do.
       const nav = this.page
-        .locator('nav[aria-label="Primary Navigation"], #global-nav, [data-test-global-nav]')
+        .locator('a[href*="/mynetwork"], a[href*="/messaging"], a[href*="/notifications/"]')
         .first();
       return (await nav.count()) > 0;
     } catch {

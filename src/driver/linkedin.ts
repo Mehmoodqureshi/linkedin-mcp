@@ -278,8 +278,12 @@ export class LinkedInDriver {
    * Re-evaluate session validity (cheap, browser-free) and — when a context is
    * live and a valid session artifact exists — confirm we are actually logged
    * in. Call after login/logout to keep `getStatus()` accurate.
+   *
+   * `navigate` (default true) is forwarded to the live login check. Pass false
+   * from navigation-event callers so the check inspects the page where it sits
+   * instead of forcing a /feed goto (which would loop the browser reloading).
    */
-  async refreshSession(): Promise<void> {
+  async refreshSession(opts: { navigate?: boolean } = {}): Promise<void> {
     // Cheap, browser-free heuristic from the saved storageState artifact.
     try {
       this.sessionValid = await this.session.hasValidSession();
@@ -296,7 +300,7 @@ export class LinkedInDriver {
     // Whenever the auth module is wired to a live page, trust the live check.
     if (this.auth) {
       try {
-        this.loggedIn = await this.auth.isLoggedIn();
+        this.loggedIn = await this.auth.isLoggedIn(opts);
       } catch {
         this.loggedIn = false;
       }

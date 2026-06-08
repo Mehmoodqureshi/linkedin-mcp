@@ -25,6 +25,11 @@ export interface ConnectLinkedInProps {
   signIn?: () => Promise<string | undefined>;
   /** Check whether a LinkedIn session already exists (to show "Connected"). */
   checkAuth?: () => Promise<boolean>;
+  /**
+   * The last member who signed in (name + avatar), surviving sign-out, so we can
+   * offer a one-tap "Continue as …" tile. Resolve null when nobody is remembered.
+   */
+  lastAccount?: () => Promise<{ name: string; avatarDataUrl?: string } | null>;
   /** Sign out of LinkedIn (clears the session), returning to the idle state. */
   logOut?: () => Promise<void>;
 }
@@ -34,26 +39,38 @@ export function ConnectLinkedIn({
   onDone,
   signIn,
   checkAuth,
+  lastAccount,
   logOut,
 }: ConnectLinkedInProps): JSX.Element {
   const [status, setStatus] = useState<Status>('idle');
   const [account, setAccount] = useState<string | undefined>(undefined);
+  const [remembered, setRemembered] = useState<{ name: string; avatarDataUrl?: string } | null>(
+    null,
+  );
 
   const connecting = status === 'connecting';
   const connected = status === 'connected';
 
-  // On mount, reflect an already-authenticated session as Connected so the user
-  // gets a Log-out option instead of being asked to sign in again.
+  // On mount: load the remembered member (for the "Continue as …" tile) and the
+  // live session state together. We only auto-jump to "Connected" when there is
+  // NO remembered member — when there IS one we always show the chooser tile, and
+  // its click either resumes the still-live session in one tap (soft sign-out) or
+  // re-authenticates (hard sign-out / expired).
   useEffect(() => {
     let cancelled = false;
-    if (!checkAuth) return;
-    void checkAuth().then((ok) => {
-      if (!cancelled && ok) setStatus('connected');
-    });
+    void (async () => {
+      const a = lastAccount ? await lastAccount() : null;
+      if (cancelled) return;
+      setRemembered(a);
+      if (!a && checkAuth) {
+        const ok = await checkAuth();
+        if (!cancelled && ok) setStatus('connected');
+      }
+    })();
     return () => {
       cancelled = true;
     };
-  }, [checkAuth]);
+  }, [lastAccount, checkAuth]);
 
   const handleSignIn = async (): Promise<void> => {
     if (connecting) return;
@@ -65,6 +82,39 @@ export function ConnectLinkedIn({
     } catch {
       setStatus('error');
     }
+  };
+
+  // Returning member tile. If their session is still alive (soft sign-out),
+  // resume straight into the app — no login window, no credentials. Only when the
+  // session is gone do we fall back to a full sign-in.
+  const handleContinueAs = async (): Promise<void> => {
+    if (connecting) return;
+    setStatus('connecting');
+    try {
+      const stillValid = checkAuth ? await checkAuth() : false;
+      if (stillValid) {
+        onDone?.();
+        return;
+      }
+      const label = signIn ? await signIn() : await simulateSignIn();
+      setAccount(label);
+      setStatus('connected');
+    } catch {
+      setStatus('error');
+    }
+  };
+
+  // "Use a different account": hard sign-out (wipe the session) so the login page
+  // doesn't silently resume the remembered member, then open a fresh sign-in.
+  const handleDifferentAccount = async (): Promise<void> => {
+    if (connecting) return;
+    setRemembered(null);
+    try {
+      await logOut?.();
+    } catch {
+      /* ignore — proceed to sign-in regardless */
+    }
+    await handleSignIn();
   };
 
   const handleLogOut = async (): Promise<void> => {
@@ -97,6 +147,40 @@ export function ConnectLinkedIn({
               </span>
               <span className="rw-signin__cta"><CheckIcon /></span>
             </div>
+          ) : remembered ? (
+            <>
+              {/* Returning member: a one-tap tile with their avatar. */}
+              <button
+                type="button"
+                className="rw-signin rw-signin--member"
+                onClick={() => void handleContinueAs()}
+                disabled={connecting}
+                aria-busy={connecting}
+              >
+                <span className="rw-option__icon">
+                  <Avatar name={remembered.name} src={remembered.avatarDataUrl} />
+                </span>
+                <span className="rw-option__text">
+                  <span className="rw-option__title">
+                    {connecting ? 'Signing in…' : `Continue as ${remembered.name}`}
+                  </span>
+                  <span className="rw-option__subtitle">
+                    {status === 'error'
+                      ? 'Something went wrong — tap to try again'
+                      : 'Resume your session — no password needed'}
+                  </span>
+                </span>
+                <span className="rw-signin__cta">{connecting ? <Spinner /> : '→'}</span>
+              </button>
+              <button
+                type="button"
+                className="rw-altsignin"
+                onClick={() => void handleDifferentAccount()}
+                disabled={connecting}
+              >
+                Use a different account
+              </button>
+            </>
           ) : (
             <button
               type="button"
@@ -171,6 +255,23 @@ function StepIndicator({ done }: { done: boolean }): JSX.Element {
         Connect LinkedIn
       </span>
     </div>
+  );
+}
+
+/** Remembered member's avatar — their photo, or initials if none was captured. */
+function Avatar({ name, src }: { name: string; src?: string }): JSX.Element {
+  if (src) {
+    return <img className="rw-avatar" src={src} alt={name} width={50} height={50} />;
+  }
+  const initials = name
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((w) => w[0]?.toUpperCase() ?? '')
+    .join('');
+  return (
+    <span className="rw-avatar rw-avatar--initials" aria-hidden="true">
+      {initials || '?'}
+    </span>
   );
 }
 

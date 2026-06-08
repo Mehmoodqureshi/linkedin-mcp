@@ -163,6 +163,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
           properties: {
             locations: { type: 'array', items: { type: 'string' } },
             currentCompanies: { type: 'array', items: { type: 'string' } },
+            pastCompanies: { type: 'array', items: { type: 'string' } },
             industries: { type: 'array', items: { type: 'string' } },
             connectionDegree: {
               type: 'array',
@@ -212,6 +213,27 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
                   'executive',
                 ],
               },
+            },
+            jobType: {
+              type: 'array',
+              items: {
+                type: 'string',
+                enum: [
+                  'full-time',
+                  'part-time',
+                  'contract',
+                  'temporary',
+                  'internship',
+                  'volunteer',
+                  'other',
+                ],
+              },
+            },
+            salary: {
+              type: 'string',
+              description:
+                "Minimum salary, e.g. '40k', '100k', or '120000'. Maps to the " +
+                'closest LinkedIn salary band.',
             },
             datePosted: {
               type: 'string',

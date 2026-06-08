@@ -203,18 +203,20 @@ function createWindow(): BrowserWindow {
   // embedded BrowserView (which would otherwise cover the screen).
   const connectUi = process.env.LINKEDIN_CONNECT_UI === '1';
 
+  // Whether to dock the native LinkedIn BrowserView. True only for the control
+  // panel; the connect/onboarding screens render full-window with no view.
+  // Mutated by the async entry decision below before 'ready-to-show' fires.
+  let dockView = false;
+
   // Dock the native LinkedIn BrowserView into this window once the UI is up.
   // attach() creates the view, navigates it to LinkedIn, then attaches the
   // Playwright driver over CDP — so the right pane is a real, interactive
   // browser, not a screencast. NOTE: the renderer must have finished loading
   // before the driver connects (a blank host target churns and wedges
   // connectOverCDP), so we attach on 'ready-to-show', which fires post-load.
-  if (!connectUi) {
-    embedded?.setWindow(win);
-  }
   win.once('ready-to-show', () => {
     win.show();
-    if (connectUi) return;
+    if (!dockView) return;
     void embedded?.attach().catch((err) => {
       process.stderr.write(`[main] embedded attach failed: ${String(err)}\n`);
     });
@@ -235,13 +237,41 @@ function createWindow(): BrowserWindow {
     }
   });
 
+  // Pick the entry screen, then load it. The page choice is async (it inspects
+  // the saved session + remembered member), but it resolves before the slow
+  // 'ready-to-show' fires, so dockView is set in time for the attach decision.
   const devServerUrl = process.env.ELECTRON_RENDERER_URL;
-  if (isDev && devServerUrl) {
-    void win.loadURL(devServerUrl);
-  } else {
-    const page = connectUi ? 'connect.html' : 'index.html';
-    void win.loadFile(join(__dirname, `../renderer/${page}`));
-  }
+  void (async () => {
+    let page = 'index.html';
+    let hash: string | undefined;
+
+    if (connectUi) {
+      page = 'connect.html';
+    } else {
+      // Launch profile picker: if we remember a member from a previous sign-in,
+      // greet with the step-2 chooser — a one-tap "Continue as …" tile (which
+      // resumes the preserved session directly, no password) plus "Use a
+      // different account". A brand-new user (nothing remembered) instead lands
+      // on the control panel, whose pane hosts the first-run login.
+      const last = await embedded?.lastAccount().catch(() => null);
+      if (last) {
+        page = 'connect.html';
+        hash = 'linkedin';
+      }
+    }
+
+    dockView = page === 'index.html';
+    if (dockView) embedded?.setWindow(win);
+
+    if (isDev && devServerUrl) {
+      await win.loadURL(devServerUrl);
+    } else {
+      await win.loadFile(
+        join(__dirname, `../renderer/${page}`),
+        hash ? { hash } : undefined,
+      );
+    }
+  })();
 
   mainWindow = win;
   return win;
@@ -381,9 +411,34 @@ async function bootstrap(): Promise<void> {
     if (!win || win.isDestroyed()) return { ok: false };
     await win.loadFile(join(__dirname, '../renderer/index.html'));
     embedded?.setWindow(win);
-    await embedded?.attach().catch((err) => {
+    // freshFeed: the user just signed in, so dock the view straight onto the
+    // feed (navigated off-screen first) rather than re-showing whatever page it
+    // was parked on during sign-out — otherwise the pane reopens on the login
+    // screen even though we're now authenticated.
+    await embedded?.attach({ freshFeed: true }).catch((err) => {
       process.stderr.write(`[main] embedded attach after finish failed: ${String(err)}\n`);
     });
+    return { ok: true };
+  });
+
+  // 2d. Reverse hand-off (used on logout): swap the control panel back to the
+  //     connect-UI flow at step 2 ("Connect Your LinkedIn").
+  //
+  //     This is a SOFT sign-out: we deliberately KEEP the LinkedIn session in the
+  //     partition. That's what lets step 2 show the remembered member's avatar as
+  //     a "Continue as …" tile that resumes the live session in one tap — no
+  //     re-typing credentials. (A hard sign-out that wipes the session is offered
+  //     separately on that screen via "Use a different account".) We only detach
+  //     the docked view first, so it doesn't cover the connect screen.
+  ipcMain.handle('app:open-connect', async (_e, step?: unknown) => {
+    const win = mainWindow;
+    if (!win || win.isDestroyed()) return { ok: false };
+    await embedded?.detach();
+    const hash = step === 'linkedin' || step === 'mcp' ? String(step) : undefined;
+    await win.loadFile(
+      join(__dirname, '../renderer/connect.html'),
+      hash ? { hash } : undefined,
+    );
     return { ok: true };
   });
 

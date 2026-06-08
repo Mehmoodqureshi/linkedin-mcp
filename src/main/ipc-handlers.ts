@@ -16,7 +16,7 @@
 import { app, ipcMain } from 'electron';
 
 import type { LinkedInDriver } from '../driver/linkedin';
-import type { PeopleFilters, JobFilters } from '../driver/actions/search';
+import type { PeopleFilters, JobFilters, CompanyFilters } from '../driver/actions/search';
 import { getQuotaManager } from '../driver/quota';
 import { TOOL_DEFINITIONS } from '../mcp/tools';
 import { buildClaudeDesktopConfig } from '../mcp/claude-desktop-config';
@@ -164,8 +164,10 @@ export function registerIpcHandlers(ctx: IpcContext): void {
 
   ipcMain.handle(
     'linkedin:search-companies',
-    (_evt, payload: { query: string }) =>
-      guard(() => ctx.getDriver().search.searchCompanies(payload.query)),
+    (_evt, payload: { query: string; filters?: CompanyFilters }) =>
+      guard(() =>
+        ctx.getDriver().search.searchCompanies(payload.query, payload.filters),
+      ),
   );
 
   ipcMain.handle(

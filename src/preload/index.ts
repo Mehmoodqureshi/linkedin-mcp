@@ -57,8 +57,13 @@ const INVOKE_CHANNELS = [
   'linkedin:session-state',
   // Sign out: clear the persisted LinkedIn session.
   'linkedin:clear-session',
+  // The last signed-in member (name + avatar) for the "Continue as …" tile.
+  'linkedin:last-account',
   // Onboarding hand-off: swap the connect-UI window to the main control panel.
   'app:open-main',
+  // Reverse hand-off: swap the control panel back to the connect-UI flow,
+  // optionally at a given step (e.g. 'linkedin' = step 2) — used on logout.
+  'app:open-connect',
 ] as const;
 
 /** One-way (fire-and-forget) channels. */
