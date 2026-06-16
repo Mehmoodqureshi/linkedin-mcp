@@ -60,7 +60,11 @@ function printHelp(): void {
       `  LINKEDIN_MCP_USERDATA   Override the data dir (default: ~/.linkedin-mcp)\n` +
       `  LINKEDIN_HEADLESS=1     Launch Chromium headless (default: headed, so you\n` +
       `                          can complete the one-time manual login)\n` +
-      `  LINKEDIN_USER_DATA_DIR  Alias for the driver's persistent profile dir\n`,
+      `  LINKEDIN_USER_DATA_DIR  Alias for the driver's persistent profile dir\n` +
+      `  LINKEDIN_ALLOW_MUTATIONS  Comma-separated allowlist of write actions to enable\n` +
+      `                          (e.g. send_message,react) or "all". Write actions\n` +
+      `                          (message/connect/comment/react/invitations) are\n` +
+      `                          DISABLED by default.\n`,
   );
 }
 

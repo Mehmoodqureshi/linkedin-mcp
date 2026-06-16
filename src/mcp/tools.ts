@@ -39,6 +39,7 @@ import {
 
 import { getInstance, type LinkedInDriver } from '../driver/linkedin';
 import type { ReactionType } from '../driver/actions';
+import { isMutatingTool, mutationAllowed } from './mutation-gate';
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -919,6 +920,15 @@ export async function dispatchToolCall(
     const handler = TOOL_HANDLERS[name];
     if (!handler) {
       throw new McpToolError(`Unknown tool: "${name}".`);
+    }
+    // Deny-by-default gate for account-modifying actions. Runs BEFORE the handler
+    // so a denied write never even launches the browser.
+    if (isMutatingTool(name) && !mutationAllowed(name, process.env.LINKEDIN_ALLOW_MUTATIONS)) {
+      throw new McpToolError(
+        `"${name}" takes an action on your LinkedIn account and is disabled by default. ` +
+          'Enable write actions by setting LINKEDIN_ALLOW_MUTATIONS ' +
+          '(e.g. LINKEDIN_ALLOW_MUTATIONS=send_message,react), or "all" to allow every write action.',
+      );
     }
     const args = asArgs(rawArgs);
     return await handler(args);

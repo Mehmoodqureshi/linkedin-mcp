@@ -60,7 +60,8 @@
     "dist:win": "npm run gen-icon && npm run build && electron-builder --win",
     "dist:linux": "npm run gen-icon && npm run build && electron-builder --linux",
     "prepublishOnly": "npm run clean && npm run build",
-    "postinstall": "node scripts/postinstall.js"
+    "postinstall": "node scripts/postinstall.js",
+    "test:unit": "ts-node --project tsconfig.json test/mutation-gate.test.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",
