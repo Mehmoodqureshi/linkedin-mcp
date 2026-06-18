@@ -289,17 +289,27 @@ export class AuthActions {
         await navigate(this.page, `${LINKEDIN_BASE}/feed/`);
       }
       const url = this.page.url();
-      if (url.includes('/login') || url.includes('authwall')) {
+      if (url.includes('/login') || url.includes('authwall') || url.includes('/checkpoint')) {
         return false;
       }
       // LinkedIn hashes its class names and dropped the old #global-nav /
       // aria-label="Primary Navigation" hooks, so key off stable href targets
       // instead: the logged-in global nav always links to My Network / Messaging
       // / Notifications, and logged-out pages (authwall/login) never do.
+      //
+      // NOTE: in the embedded BrowserView the session cookie lives in an Electron
+      // session partition that CDP does not surface via `context.cookies()`, so
+      // the cookie fast-path above always misses and we land here on EVERY check.
+      // A freshly-navigated feed needs a beat to hydrate its nav, so WAIT for the
+      // nav to attach rather than reading once and racing the render (which made
+      // a genuinely-authed session intermittently report "not logged in").
       const nav = this.page
         .locator('a[href*="/mynetwork"], a[href*="/messaging"], a[href*="/notifications/"]')
         .first();
-      return (await nav.count()) > 0;
+      return nav
+        .waitFor({ state: 'attached', timeout: 8000 })
+        .then(() => true)
+        .catch(() => false);
     } catch {
       return false;
     }

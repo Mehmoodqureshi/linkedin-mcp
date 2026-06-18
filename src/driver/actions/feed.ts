@@ -261,45 +261,87 @@ export class FeedActions {
     assertAuthenticated(this.page);
     await rateLimitDelay();
 
-    await autoScroll(this.page, '[data-urn*="urn:li:activity:"]', limit).catch(
-      () => undefined,
-    );
+    // Two layouts ship from this URL:
+    //  - Members: an infinite, virtualized list — scroll to load more.
+    //  - Companies: a fixed "Posts" pager ("Page 1 of N", Previous/Next) that
+    //    renders only the current page's posts in the DOM, so scrolling never
+    //    loads the rest. We collect the current page's activity URNs, then click
+    //    "Next" and repeat until we hit `limit` or run out of pages.
+    // Both keep the classic `<div data-urn="urn:li:activity:<id>">` container,
+    // so the per-page scrape is identical; only the "load more" mechanism differs.
+    const collectPage = (): Promise<Array<{ id: string; text: string }>> =>
+      this.page.evaluate(() => {
+        const norm = (s: string | null | undefined): string =>
+          (s ?? '').replace(/\s+/g, ' ').trim();
+        const root: HTMLElement =
+          document.querySelector('main') ?? document.body;
+        const seen = new Set<string>();
+        const out: Array<{ id: string; text: string }> = [];
+        for (const el of Array.from(
+          root.querySelectorAll('[data-urn*="urn:li:activity:"]'),
+        )) {
+          const m = (el.getAttribute('data-urn') ?? '').match(
+            /urn:li:activity:(\d+)/,
+          );
+          if (!m) continue;
+          const id = m[1] ?? '';
+          if (!id || seen.has(id)) continue;
+          seen.add(id);
+          out.push({
+            id,
+            text: norm((el as HTMLElement).innerText).slice(0, 600),
+          });
+        }
+        return out;
+      });
 
-    // The recent-activity page (unlike the new React home feed) keeps the
-    // classic `<div data-urn="urn:li:activity:<id>">` post container, verified by
-    // DOM probe. Read the URN straight off those, newest first.
-    const raw = await this.page.evaluate((cap: number) => {
-      const norm = (s: string | null | undefined): string =>
-        (s ?? '').replace(/\s+/g, ' ').trim();
-      const root: HTMLElement = document.querySelector('main') ?? document.body;
-      const seen = new Set<string>();
-      const out: Array<{ id: string; text: string }> = [];
-      for (const el of Array.from(
-        root.querySelectorAll('[data-urn*="urn:li:activity:"]'),
-      )) {
-        const m = (el.getAttribute('data-urn') ?? '').match(/urn:li:activity:(\d+)/);
-        if (!m) continue;
-        const id = m[1] ?? '';
-        if (!id || seen.has(id)) continue;
-        seen.add(id);
-        out.push({
-          id,
-          text: norm((el as HTMLElement).innerText).slice(0, 600),
-        });
-        if (out.length >= cap) break;
+    // Click the pager's enabled "Next" control, if present. Returns false when
+    // there is no Next button or it's on the last page (disabled) — i.e. done.
+    const goToNextPage = async (): Promise<boolean> => {
+      const next = this.page
+        .locator(
+          'button[aria-label="Next"]:not([disabled]):not([aria-disabled="true"]), ' +
+            '.artdeco-pagination__button--next:not([disabled]):not([aria-disabled="true"])',
+        )
+        .first();
+      if ((await next.count()) === 0) return false;
+      if (!(await next.isVisible().catch(() => false))) return false;
+      await next.scrollIntoViewIfNeeded().catch(() => undefined);
+      await next.click({ force: true }).catch(() => undefined);
+      // Let the pager swap in the next page's posts.
+      await sleep(1400);
+      return true;
+    };
+
+    const byId = new Map<string, { id: string; text: string }>();
+    const maxPages = 15; // safety cap against a runaway pager loop
+    for (let pageNum = 0; pageNum < maxPages; pageNum++) {
+      // For the member infinite-scroll layout this loads more; on the company
+      // pager it's a cheap no-op (height doesn't grow → returns immediately).
+      await autoScroll(
+        this.page,
+        '[data-urn*="urn:li:activity:"]',
+        limit,
+      ).catch(() => undefined);
+
+      for (const row of await collectPage()) {
+        if (!byId.has(row.id)) byId.set(row.id, row);
       }
-      return out;
-    }, limit);
+      if (byId.size >= limit) break;
+      if (!(await goToNextPage())) break;
+    }
 
-    return raw.map((r) => {
-      const post: MemberPost = {
-        urn: `urn:li:activity:${r.id}`,
-        postUrl: `${LINKEDIN_BASE}/feed/update/urn:li:activity:${r.id}/`,
-      };
-      const text = clean(r.text);
-      if (text) post.text = text;
-      return post;
-    });
+    return Array.from(byId.values())
+      .slice(0, limit)
+      .map((r) => {
+        const post: MemberPost = {
+          urn: `urn:li:activity:${r.id}`,
+          postUrl: `${LINKEDIN_BASE}/feed/update/urn:li:activity:${r.id}/`,
+        };
+        const text = clean(r.text);
+        if (text) post.text = text;
+        return post;
+      });
   }
 
   // -------------------------------------------------------------------------
@@ -344,6 +386,11 @@ export class FeedActions {
       'button[aria-label^="Unreact "]:not([aria-label*="comment" i])';
     const trigger = this.page.locator(triggerSel).first();
 
+    // Right after navigation the React post can still be hydrating; wait for the
+    // reaction control to actually paint before probing it (a freshly-navigated
+    // embedded view otherwise reports "no control" / no-ops the first interaction).
+    await trigger.waitFor({ state: 'visible', timeout: 6000 }).catch(() => undefined);
+
     if ((await trigger.count()) === 0) {
       return {
         success: false,
@@ -372,23 +419,30 @@ export class FeedActions {
 
     await rateLimitDelay();
 
+    // Bring the action bar into view first — in the embedded BrowserView a long
+    // post body can push the reaction control below the fold, and a hover/click
+    // on an off-screen control silently no-ops on the freshly-navigated page.
+    await trigger.scrollIntoViewIfNeeded().catch(() => undefined);
+
     // Apply: 'like' is a direct click; the others live behind the hover flyout.
     if (reaction === 'like') {
       await trigger.click().catch(() => undefined);
     } else {
-      await trigger.hover().catch(() => undefined);
-      await sleep(900); // let the reactions picker animate in
-      const pick = this.page
-        .locator(
-          `button[aria-label="React ${label}"], ` +
-            `button[aria-label="${label}"]:not([aria-label*="comment" i]), ` +
-            `div[role="menu"] button[aria-label*="${label}" i]`,
-        )
-        .first();
-      if (
-        (await pick.count()) === 0 ||
-        !(await pick.isVisible().catch(() => false))
-      ) {
+      // The reactions flyout is portaled in on hover (verified by DOM probe: the
+      // entries are `button[aria-label="React <Reaction>"]`). Right after
+      // navigation the hover can fire before LinkedIn wires up the trigger, so
+      // hover then WAIT for the specific reaction to paint, retrying the hover
+      // once rather than relying on a fixed sleep that may be too short.
+      const pick = this.page.locator(`button[aria-label="React ${label}"]`).first();
+      let opened = false;
+      for (let attempt = 0; attempt < 2 && !opened; attempt++) {
+        await trigger.hover().catch(() => undefined);
+        opened = await pick
+          .waitFor({ state: 'visible', timeout: 3000 })
+          .then(() => true)
+          .catch(() => false);
+      }
+      if (!opened) {
         return {
           success: false,
           reaction,
@@ -487,15 +541,29 @@ export class FeedActions {
     }
 
     // Type with REAL keystrokes. `fill()` does NOT update Quill's internal model,
-    // so it posts an empty comment — keyboard input is required.
-    await editor.scrollIntoViewIfNeeded().catch(() => undefined);
-    await editor.click({ force: true }).catch(() => undefined);
-    await this.page.keyboard.type(text, { delay: 20 });
-    await sleep(700);
+    // so it posts an empty comment — keyboard input is required. Right after a
+    // fresh navigation the Quill editor may not hold focus yet, so focus it
+    // explicitly and retry once if the first burst doesn't register (clearing any
+    // partial text first so a retry never duplicates the comment body).
+    const probe = text.slice(0, 24).replace(/\s+/g, ' ');
+    let typed = '';
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await editor.scrollIntoViewIfNeeded().catch(() => undefined);
+      await editor.click({ force: true }).catch(() => undefined);
+      await editor.focus().catch(() => undefined);
+      if (attempt > 0) {
+        await this.page.keyboard.press('Control+A').catch(() => undefined);
+        await this.page.keyboard.press('Backspace').catch(() => undefined);
+      }
+      await sleep(200);
+      await this.page.keyboard.type(text, { delay: 20 });
+      await sleep(700);
+      typed = (await editor.innerText().catch(() => '')).replace(/\s+/g, ' ');
+      if (typed.includes(probe)) break;
+    }
 
     // Confirm the text actually registered in the editor before submitting.
-    const typed = await editor.innerText().catch(() => '');
-    if (!typed.replace(/\s+/g, ' ').includes(text.slice(0, 24).replace(/\s+/g, ' '))) {
+    if (!typed.includes(probe)) {
       throw new ActionError(
         'Comment text did not register in the composer.',
         'compose_failed',
