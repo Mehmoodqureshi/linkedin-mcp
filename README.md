@@ -1,5 +1,9 @@
 # LinkedIn MCP
 
+[![CI](https://github.com/Mehmoodqureshi/linkedin-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/Mehmoodqureshi/linkedin-mcp/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/%40mehmoodqureshi%2Flinkedin-mcp?label=npm)](https://www.npmjs.com/package/@mehmoodqureshi/linkedin-mcp)
+[![license](https://img.shields.io/npm/l/%40mehmoodqureshi%2Flinkedin-mcp?label=license)](LICENSE)
+
 A local Electron desktop app that drives **LinkedIn** through a real, Playwright-controlled Chromium browser and exposes that automation to **Claude Desktop** (or any MCP client) as an **MCP server over stdio**.
 
 Instead of using LinkedIn's (restricted) official API, the app logs in as you in a real browser window, keeps the session alive on disk, and lets an AI assistant call a small set of well-defined tools (view a profile, search people/jobs/companies, send a message, send a connection request, read the feed and notifications, etc.). You stay in control: login is manual and headed, so you complete any 2FA/captcha yourself, and your password is never stored.
