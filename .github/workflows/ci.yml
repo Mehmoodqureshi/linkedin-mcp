@@ -36,3 +36,7 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      - name: Test (unit)
+        # Unit tests only; the connect/tool smoke tests need Electron + a display.
+        run: npm run test:unit
