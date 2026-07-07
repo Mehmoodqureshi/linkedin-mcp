@@ -64,19 +64,19 @@
     "test:unit": "ts-node --project tsconfig.json test/mutation-gate.test.ts"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.4",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "playwright": "^1.49.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "zod": "^3.24.1"
   },
   "devDependencies": {
-    "@types/node": "^20.17.10",
-    "@types/react": "^18.3.30",
+    "@types/node": "^20.19.43",
+    "@types/react": "^18.3.31",
     "@types/react-dom": "^18.3.7",
     "electron": "^28.3.3",
-    "electron-builder": "^24.13.3",
-    "esbuild": "^0.28.0",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.1",
     "rimraf": "^5.0.10",
     "ts-node": "^10.9.2",
     "typescript": "^5.7.2"

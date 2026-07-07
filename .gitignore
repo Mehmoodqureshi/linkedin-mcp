@@ -33,7 +33,7 @@ test-targets.json
 
 # Scraped prospect data / generated campaigns — contains third-party PII.
 orbit-campaign.md
-*-campaign.md
+*campaign*.md
 prospects*.json
 
 # Playwright
@@ -51,6 +51,9 @@ yarn-error.log*
 
 # Local agent / editor config
 .claude/
+
+# Local MCP server config — contains user-specific absolute paths
+.mcp.json
 
 # OS / editor
 .DS_Store
