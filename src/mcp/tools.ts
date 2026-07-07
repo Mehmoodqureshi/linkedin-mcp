@@ -4,38 +4,37 @@
  * This module is the single place where the Model Context Protocol surface is
  * declared. It owns two responsibilities:
  *
- *   1. The *catalog*: a JSON-Schema description of every tool (name, human
- *      description, and `inputSchema`) advertised to the MCP client. This is
+ *   1. The *catalog*: a per-tool zod *raw shape* (name, human description, and
+ *      `inputSchema`) advertised to the MCP client. The SDK derives the JSON
+ *      Schema from the zod shape and validates arguments against it, so this is
  *      what Claude Desktop reads to know what it may call and with what shape.
  *
- *   2. The *dispatch*: a `name -> handler` map. Each handler validates its
- *      arguments against the declared schema, fetches the process-wide
+ *   2. The *dispatch*: a `name -> handler` map. Each handler re-reads its
+ *      (already zod-validated) arguments, fetches the process-wide
  *      `LinkedInDriver` singleton, makes sure the browser is launched and the
  *      driver is `ready`, invokes the relevant action module, and serializes
  *      the result back into the MCP `content` envelope.
  *
- * `registerTools(server)` wires the catalog + dispatch onto a `Server` by
- * installing the `ListTools` and `CallTool` request handlers.
+ * `registerTools(server)` wires the catalog + dispatch onto an `McpServer` by
+ * calling `server.registerTool` once per tool, routing each call through
+ * `dispatchToolCall`.
  *
  * Design notes:
- *   - We deliberately keep validation lightweight and dependency-free (plain
- *     runtime guards expressed against the JSON Schema) rather than pulling a
- *     parser into the hot path. The schema *is* the contract; the guards only
- *     defend the handler from malformed input.
+ *   - Input is validated by the SDK against the zod `inputSchema` BEFORE a
+ *     handler runs, so malformed arguments surface as a protocol validation
+ *     error. The handler-level runtime guards remain as defence-in-depth.
  *   - Every handler routes through `withReadyDriver`, which lazily launches the
  *     browser. The first tool call therefore pays the Chromium start-up cost;
  *     subsequent calls reuse the live context.
- *   - Handlers never throw raw — `server.ts` wraps them — but they DO throw
- *     `McpToolError` with a clear message when input is invalid or the driver
- *     cannot reach `ready`, so the client gets an actionable `isError` result.
+ *   - Handlers never throw raw — `dispatchToolCall` wraps them — but they DO
+ *     throw `McpToolError` with a clear message when input is invalid or the
+ *     driver cannot reach `ready`, so the client gets an actionable `isError`
+ *     result.
  */
 
-import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-  type CallToolResult,
-} from '@modelcontextprotocol/sdk/types.js';
+import { z, type ZodRawShape } from 'zod';
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { type CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 import { getInstance, type LinkedInDriver } from '../driver/linkedin';
 import type { ReactionType } from '../driver/actions';
@@ -58,14 +57,19 @@ export class McpToolError extends Error {
 }
 
 // ---------------------------------------------------------------------------
-// Tool catalog (JSON-Schema input descriptions)
+// Tool catalog (zod input shapes)
 // ---------------------------------------------------------------------------
 
-/** A single advertised MCP tool. */
+/**
+ * A single advertised MCP tool. Its `inputSchema` is a zod *raw shape* (a plain
+ * object mapping field names to zod validators), which `registerTools` hands to
+ * `server.registerTool` — the SDK builds the JSON Schema and validates input
+ * against it before the handler runs.
+ */
 export interface ToolDefinition {
   name: string;
   description: string;
-  inputSchema: Record<string, unknown>;
+  inputSchema: ZodRawShape;
 }
 
 /**
@@ -83,22 +87,20 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       '2FA/captcha. Waits until the session is established or times out, then ' +
       'persists the session.',
     inputSchema: {
-      type: 'object',
-      properties: {
-        email: {
-          type: 'string',
-          description:
-            'LinkedIn account email to pre-fill on the login form. Optional; ' +
+      email: z
+        .string()
+        .describe(
+          'LinkedIn account email to pre-fill on the login form. Optional; ' +
             'if omitted the user types it manually in the opened window.',
-        },
-        password: {
-          type: 'string',
-          description:
-            'LinkedIn account password to pre-fill. Optional and never stored; ' +
+        )
+        .optional(),
+      password: z
+        .string()
+        .describe(
+          'LinkedIn account password to pre-fill. Optional and never stored; ' +
             'if omitted the user types it manually in the opened window.',
-        },
-      },
-      additionalProperties: false,
+        )
+        .optional(),
     },
   },
   {
@@ -107,11 +109,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       'Clear the stored LinkedIn session: deletes the saved storageState and ' +
       'clears the persistent browser profile cookies so the next action ' +
       'requires a fresh manual login.',
-    inputSchema: {
-      type: 'object',
-      properties: {},
-      additionalProperties: false,
-    },
+    inputSchema: {},
   },
   {
     name: 'linkedin_status',
@@ -119,11 +117,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       'Return the current driver/session status: lifecycle state, whether a ' +
       'LinkedIn session is authenticated, and whether the persisted session ' +
       'cookies are still valid. Useful for deciding whether a login is needed.',
-    inputSchema: {
-      type: 'object',
-      properties: {},
-      additionalProperties: false,
-    },
+    inputSchema: {},
   },
   {
     name: 'linkedin_get_profile',
@@ -132,17 +126,12 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       'data: name, headline, location, about, experience, education, skills, ' +
       'and connection count.',
     inputSchema: {
-      type: 'object',
-      properties: {
-        profileUrl: {
-          type: 'string',
-          description:
-            'Full profile URL (e.g. https://www.linkedin.com/in/john-doe/) ' +
+      profileUrl: z
+        .string()
+        .describe(
+          'Full profile URL (e.g. https://www.linkedin.com/in/john-doe/) ' +
             'or an /in/ slug (e.g. john-doe).',
-        },
-      },
-      required: ['profileUrl'],
-      additionalProperties: false,
+        ),
     },
   },
   {
@@ -152,32 +141,21 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       'headline, location, profile URL, connection degree). Supports a free- ' +
       'text query plus common filters.',
     inputSchema: {
-      type: 'object',
-      properties: {
-        query: {
-          type: 'string',
-          description: "Free-text keywords, e.g. 'head of engineering fintech'.",
-        },
-        filters: {
-          type: 'object',
-          description: 'Optional People-search filters.',
-          properties: {
-            locations: { type: 'array', items: { type: 'string' } },
-            currentCompanies: { type: 'array', items: { type: 'string' } },
-            pastCompanies: { type: 'array', items: { type: 'string' } },
-            industries: { type: 'array', items: { type: 'string' } },
-            connectionDegree: {
-              type: 'array',
-              items: { type: 'string', enum: ['1st', '2nd', '3rd'] },
-            },
-            title: { type: 'string' },
-            school: { type: 'string' },
-          },
-          additionalProperties: false,
-        },
-      },
-      required: ['query'],
-      additionalProperties: false,
+      query: z
+        .string()
+        .describe("Free-text keywords, e.g. 'head of engineering fintech'."),
+      filters: z
+        .object({
+          locations: z.array(z.string()).optional(),
+          currentCompanies: z.array(z.string()).optional(),
+          pastCompanies: z.array(z.string()).optional(),
+          industries: z.array(z.string()).optional(),
+          connectionDegree: z.array(z.enum(['1st', '2nd', '3rd'])).optional(),
+          title: z.string().optional(),
+          school: z.string().optional(),
+        })
+        .describe('Optional People-search filters.')
+        .optional(),
     },
   },
   {
@@ -186,67 +164,54 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       'Run a Jobs search and return normalized job postings (title, company, ' +
       'location, posted date, workplace type, salary if shown, job URL).',
     inputSchema: {
-      type: 'object',
-      properties: {
-        query: {
-          type: 'string',
-          description: "Job title or keywords, e.g. 'senior typescript engineer'.",
-        },
-        filters: {
-          type: 'object',
-          description: 'Optional Jobs-search filters.',
-          properties: {
-            location: { type: 'string' },
-            workplaceType: {
-              type: 'array',
-              items: { type: 'string', enum: ['on-site', 'remote', 'hybrid'] },
-            },
-            experienceLevel: {
-              type: 'array',
-              items: {
-                type: 'string',
-                enum: [
-                  'internship',
-                  'entry',
-                  'associate',
-                  'mid-senior',
-                  'director',
-                  'executive',
-                ],
-              },
-            },
-            jobType: {
-              type: 'array',
-              items: {
-                type: 'string',
-                enum: [
-                  'full-time',
-                  'part-time',
-                  'contract',
-                  'temporary',
-                  'internship',
-                  'volunteer',
-                  'other',
-                ],
-              },
-            },
-            salary: {
-              type: 'string',
-              description:
-                "Minimum salary, e.g. '40k', '100k', or '120000'. Maps to the " +
+      query: z
+        .string()
+        .describe("Job title or keywords, e.g. 'senior typescript engineer'."),
+      filters: z
+        .object({
+          location: z.string().optional(),
+          workplaceType: z
+            .array(z.enum(['on-site', 'remote', 'hybrid']))
+            .optional(),
+          experienceLevel: z
+            .array(
+              z.enum([
+                'internship',
+                'entry',
+                'associate',
+                'mid-senior',
+                'director',
+                'executive',
+              ]),
+            )
+            .optional(),
+          jobType: z
+            .array(
+              z.enum([
+                'full-time',
+                'part-time',
+                'contract',
+                'temporary',
+                'internship',
+                'volunteer',
+                'other',
+              ]),
+            )
+            .optional(),
+          salary: z
+            .string()
+            .describe(
+              "Minimum salary, e.g. '40k', '100k', or '120000'. Maps to the " +
                 'closest LinkedIn salary band.',
-            },
-            datePosted: {
-              type: 'string',
-              enum: ['any', 'past-month', 'past-week', 'past-24h'],
-            },
-            easyApplyOnly: { type: 'boolean' },
-          },
-          additionalProperties: false,
-        },
-      },
-      required: ['query'],
-      additionalProperties: false,
+            )
+            .optional(),
+          datePosted: z
+            .enum(['any', 'past-month', 'past-week', 'past-24h'])
+            .optional(),
+          easyApplyOnly: z.boolean().optional(),
+        })
+        .describe('Optional Jobs-search filters.')
+        .optional(),
     },
   },
   {
@@ -255,37 +220,28 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       'Run a Company search and return normalized company cards (name, ' +
       'industry, size, company URL).',
     inputSchema: {
-      type: 'object',
-      properties: {
-        query: { type: 'string', description: 'Company name or keywords.' },
-        filters: {
-          type: 'object',
-          description: 'Optional Company-search filters.',
-          properties: {
-            locations: { type: 'array', items: { type: 'string' } },
-            industries: { type: 'array', items: { type: 'string' } },
-            companySize: {
-              type: 'array',
-              items: {
-                type: 'string',
-                enum: [
-                  '1-10',
-                  '11-50',
-                  '51-200',
-                  '201-500',
-                  '501-1000',
-                  '1001-5000',
-                  '5001-10000',
-                  '10001+',
-                ],
-              },
-            },
-          },
-          additionalProperties: false,
-        },
-      },
-      required: ['query'],
-      additionalProperties: false,
+      query: z.string().describe('Company name or keywords.'),
+      filters: z
+        .object({
+          locations: z.array(z.string()).optional(),
+          industries: z.array(z.string()).optional(),
+          companySize: z
+            .array(
+              z.enum([
+                '1-10',
+                '11-50',
+                '51-200',
+                '201-500',
+                '501-1000',
+                '1001-5000',
+                '5001-10000',
+                '10001+',
+              ]),
+            )
+            .optional(),
+        })
+        .describe('Optional Company-search filters.')
+        .optional(),
     },
   },
   {
@@ -295,21 +251,8 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       'open-profile / InMail-eligible member). Returns delivery status; fails ' +
       'with a clear error if messaging is not permitted for that member.',
     inputSchema: {
-      type: 'object',
-      properties: {
-        profileUrl: {
-          type: 'string',
-          description: 'Recipient profile URL or /in/ slug.',
-        },
-        message: {
-          type: 'string',
-          description: 'Message body text.',
-          minLength: 1,
-          maxLength: 8000,
-        },
-      },
-      required: ['profileUrl', 'message'],
-      additionalProperties: false,
+      profileUrl: z.string().describe('Recipient profile URL or /in/ slug.'),
+      message: z.string().min(1).max(8000).describe('Message body text.'),
     },
   },
   {
@@ -319,22 +262,15 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       'note. Subject to rate limits; returns the outcome (sent, ' +
       'already-connected, pending, or unavailable).',
     inputSchema: {
-      type: 'object',
-      properties: {
-        profileUrl: {
-          type: 'string',
-          description: 'Target profile URL or /in/ slug.',
-        },
-        note: {
-          type: 'string',
-          description:
-            'Optional personalized note (LinkedIn caps this around 300 ' +
+      profileUrl: z.string().describe('Target profile URL or /in/ slug.'),
+      note: z
+        .string()
+        .max(300)
+        .describe(
+          'Optional personalized note (LinkedIn caps this around 300 ' +
             'characters).',
-          maxLength: 300,
-        },
-      },
-      required: ['profileUrl'],
-      additionalProperties: false,
+        )
+        .optional(),
     },
   },
   {
@@ -343,11 +279,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       'List pending RECEIVED connection invitations from the invitation ' +
       'manager. Returns each inviter’s name, headline, profile URL, and ' +
       'profileId (vanity slug). The slug feeds linkedin_accept_invitation.',
-    inputSchema: {
-      type: 'object',
-      properties: {},
-      additionalProperties: false,
-    },
+    inputSchema: {},
   },
   {
     name: 'linkedin_accept_invitation',
@@ -357,16 +289,11 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       'linkedin_get_invitations) or their full profile URL. Fails with a clear ' +
       'error if no matching pending invitation is found.',
     inputSchema: {
-      type: 'object',
-      properties: {
-        profileId: {
-          type: 'string',
-          description:
-            'Inviter vanity slug (e.g. "john-doe") or full /in/ profile URL.',
-        },
-      },
-      required: ['profileId'],
-      additionalProperties: false,
+      profileId: z
+        .string()
+        .describe(
+          'Inviter vanity slug (e.g. "john-doe") or full /in/ profile URL.',
+        ),
     },
   },
   {
@@ -376,16 +303,11 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       'recipient’s profileId (vanity slug) or their full profile URL. Fails ' +
       'with a clear error if no matching sent invitation is found.',
     inputSchema: {
-      type: 'object',
-      properties: {
-        profileId: {
-          type: 'string',
-          description:
-            'Recipient vanity slug (e.g. "john-doe") or full /in/ profile URL.',
-        },
-      },
-      required: ['profileId'],
-      additionalProperties: false,
+      profileId: z
+        .string()
+        .describe(
+          'Recipient vanity slug (e.g. "john-doe") or full /in/ profile URL.',
+        ),
     },
   },
   {
@@ -397,24 +319,17 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       'carries your reaction, and reports "unavailable" if no reaction control ' +
       'is present.',
     inputSchema: {
-      type: 'object',
-      properties: {
-        postUrl: {
-          type: 'string',
-          description:
-            'Post permalink, e.g. ' +
+      postUrl: z
+        .string()
+        .describe(
+          'Post permalink, e.g. ' +
             'https://www.linkedin.com/feed/update/urn:li:activity:1234567890/ ' +
             '(as returned in a feed post’s postUrl).',
-        },
-        reaction: {
-          type: 'string',
-          description: 'Which reaction to apply. Defaults to "like".',
-          enum: ['like', 'celebrate', 'support', 'love', 'insightful', 'funny'],
-          default: 'like',
-        },
-      },
-      required: ['postUrl'],
-      additionalProperties: false,
+        ),
+      reaction: z
+        .enum(['like', 'celebrate', 'support', 'love', 'insightful', 'funny'])
+        .describe('Which reaction to apply. Defaults to "like".')
+        .optional(),
     },
   },
   {
@@ -424,24 +339,14 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       'fails with a clear error if the post is not commentable or the comment ' +
       'composer cannot be opened.',
     inputSchema: {
-      type: 'object',
-      properties: {
-        postUrl: {
-          type: 'string',
-          description:
-            'Post permalink, e.g. ' +
+      postUrl: z
+        .string()
+        .describe(
+          'Post permalink, e.g. ' +
             'https://www.linkedin.com/feed/update/urn:li:activity:1234567890/ ' +
             '(as returned in a feed post’s postUrl).',
-        },
-        text: {
-          type: 'string',
-          description: 'Comment body text.',
-          minLength: 1,
-          maxLength: 1250,
-        },
-      },
-      required: ['postUrl', 'text'],
-      additionalProperties: false,
+        ),
+      text: z.string().min(1).max(1250).describe('Comment body text.'),
     },
   },
   {
@@ -452,22 +357,14 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       'page. Use this to locate a specific person’s post (e.g. to react or ' +
       'comment) without waiting for it to appear in the volatile home feed.',
     inputSchema: {
-      type: 'object',
-      properties: {
-        profileUrl: {
-          type: 'string',
-          description: 'Target member profile URL or /in/ slug.',
-        },
-        limit: {
-          type: 'integer',
-          description: 'Number of recent posts to collect.',
-          minimum: 1,
-          maximum: 20,
-          default: 5,
-        },
-      },
-      required: ['profileUrl'],
-      additionalProperties: false,
+      profileUrl: z.string().describe('Target member profile URL or /in/ slug.'),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(20)
+        .describe('Number of recent posts to collect.')
+        .optional(),
     },
   },
   {
@@ -477,17 +374,13 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       'text, posted time, like/comment counts, post URL). Scrolls to gather ' +
       'the requested count.',
     inputSchema: {
-      type: 'object',
-      properties: {
-        limit: {
-          type: 'integer',
-          description: 'Number of posts to collect.',
-          minimum: 1,
-          maximum: 50,
-          default: 10,
-        },
-      },
-      additionalProperties: false,
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(50)
+        .describe('Number of posts to collect.')
+        .optional(),
     },
   },
   {
@@ -496,17 +389,13 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       'Read the notifications panel and return normalized notification items ' +
       '(type, actor, text, timestamp, target URL, read/unread state).',
     inputSchema: {
-      type: 'object',
-      properties: {
-        limit: {
-          type: 'integer',
-          description: 'Number of notifications to collect.',
-          minimum: 1,
-          maximum: 50,
-          default: 20,
-        },
-      },
-      additionalProperties: false,
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(50)
+        .describe('Number of notifications to collect.')
+        .optional(),
     },
   },
   {
@@ -515,11 +404,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       'List the message threads in the LinkedIn inbox as normalized ' +
       'conversation summaries (participant, snippet, conversation id, ' +
       'timestamp, unread state).',
-    inputSchema: {
-      type: 'object',
-      properties: {},
-      additionalProperties: false,
-    },
+    inputSchema: {},
   },
 ];
 
@@ -865,18 +750,20 @@ export const TOOL_HANDLERS: Record<string, ToolHandler> = {
 // ---------------------------------------------------------------------------
 
 /**
- * Wire the tool catalog and dispatch onto an MCP `Server`.
+ * Wire the tool catalog and dispatch onto an MCP `McpServer`.
  *
- * Installs:
- *   - a `ListTools` handler returning `TOOL_DEFINITIONS`, and
- *   - a `CallTool` handler that looks up `TOOL_HANDLERS[name]`, validates the
- *     arguments inside the handler, runs it, and returns the result.
+ * Registers every tool from `TOOL_DEFINITIONS` via `server.registerTool`, which
+ * advertises the tool (name + description + JSON Schema derived from the zod
+ * `inputSchema`) AND validates incoming arguments against that zod schema before
+ * the callback runs. Each callback routes through `dispatchToolCall`, which owns
+ * the deny-by-default mutation gate and the never-throw error firewall, so the
+ * safety behaviour is identical to the previous low-level wiring.
  *
- * Errors thrown by a handler propagate to `server.ts`, which converts them into
- * an MCP error result (`isError: true`) so the client sees a clean failure
+ * Errors thrown inside a handler are caught by `dispatchToolCall` and converted
+ * into an MCP error result (`isError: true`) so the client sees a clean failure
  * rather than a transport-level crash.
  */
-export function registerTools(server: Server): void {
+export function registerTools(server: McpServer): void {
   // Invariant: every advertised tool has a handler and vice versa. Catch
   // drift at startup instead of at call time.
   for (const def of TOOL_DEFINITIONS) {
@@ -890,16 +777,29 @@ export function registerTools(server: Server): void {
     }
   }
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: TOOL_DEFINITIONS,
-  }));
+  // `server.registerTool` is heavily generic (it infers the argument type from
+  // the zod shape). Feeding it a loop variable typed as the broad `ZodRawShape`
+  // makes the compiler try to instantiate that inference infinitely, so we pin a
+  // concrete, simplified call signature. Runtime behaviour is unchanged: the SDK
+  // still builds the JSON Schema, validates input against the zod shape, and
+  // invokes the callback with the validated args.
+  const register = server.registerTool.bind(server) as unknown as (
+    name: string,
+    config: { description: string; inputSchema: ZodRawShape },
+    cb: (args: Args) => Promise<CallToolResult>,
+  ) => void;
 
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const { name, arguments: rawArgs } = request.params;
-    // Our envelope is a structurally valid CallToolResult (text content +
-    // optional isError). Cast past the SDK's task-augmented union variant.
-    return dispatchToolCall(name, rawArgs) as Promise<CallToolResult>;
-  });
+  for (const def of TOOL_DEFINITIONS) {
+    register(
+      def.name,
+      { description: def.description, inputSchema: def.inputSchema },
+      // The zod-validated args are handed to `dispatchToolCall`, which runs the
+      // mutation gate + firewall. Our envelope is a structurally valid
+      // CallToolResult (text content + optional isError); cast past the SDK's
+      // task-augmented union variant.
+      async (args) => dispatchToolCall(def.name, args) as Promise<CallToolResult>,
+    );
+  }
 }
 
 /**

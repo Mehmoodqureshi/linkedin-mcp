@@ -206,9 +206,9 @@ export function registerIpcHandlers(ctx: IpcContext): void {
       TOOL_DEFINITIONS.map((t) => ({
         name: t.name,
         description: t.description,
-        params: Object.keys(
-          (t.inputSchema as { properties?: Record<string, unknown> }).properties ?? {},
-        ),
+        // `inputSchema` is now a zod raw shape (field name -> validator), so the
+        // advertised params are simply its keys.
+        params: Object.keys(t.inputSchema),
       })),
     ),
   );

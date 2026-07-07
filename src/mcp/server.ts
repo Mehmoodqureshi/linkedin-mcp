@@ -22,7 +22,7 @@
 import net from 'node:net';
 import { existsSync, unlinkSync } from 'node:fs';
 
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 
 import { registerTools } from './tools';
@@ -39,7 +39,7 @@ const SERVER_VERSION = '1.0.0';
 // ---------------------------------------------------------------------------
 
 /** The live server instance, or null when stopped. Kept so we can stop it. */
-let server: Server | null = null;
+let server: McpServer | null = null;
 
 /** The live transport, or null when stopped. */
 let transport: StdioServerTransport | null = null;
@@ -61,8 +61,8 @@ function logErr(message: string): void {
  * registered. Pure: creates and returns the instance without connecting any
  * transport, so it is easy to unit-test.
  */
-export function createServer(): Server {
-  const srv = new Server(
+export function createServer(): McpServer {
+  const srv = new McpServer(
     {
       name: SERVER_NAME,
       version: SERVER_VERSION,
@@ -75,15 +75,16 @@ export function createServer(): Server {
     },
   );
 
-  // Register the ListTools + CallTool handlers. `registerTools` already wraps
+  // Register every tool via `server.registerTool`. `registerTools` already wraps
   // each tool invocation in try/catch (via dispatchToolCall) and returns a
   // structured `isError` result instead of throwing, so a failing tool can
   // never tear down the transport.
   registerTools(srv);
 
   // Belt-and-suspenders: surface any protocol-level error to stderr instead of
-  // letting it bubble out unobserved.
-  srv.onerror = (err: unknown): void => {
+  // letting it bubble out unobserved. `McpServer` wraps the low-level `Server`,
+  // which owns the `onerror` hook.
+  srv.server.onerror = (err: unknown): void => {
     logErr(`server error: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
   };
 
