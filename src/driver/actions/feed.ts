@@ -380,6 +380,11 @@ export class FeedActions {
     // verified by DOM probe). Exclude comment-scoped reaction controls, whose
     // accessible name is "React Like to <name>'s comment".
     const triggerSel =
+      // Current LinkedIn markup: a single reaction button that reads
+      // "Reaction button state: <X>" plus an "Open reactions menu" opener.
+      'button[aria-label^="Reaction button state:"]:not([aria-label*="comment" i]), ' +
+      'button[aria-label="Open reactions menu"]:not([aria-label*="comment" i]), ' +
+      // Legacy markup (kept as a fallback).
       'button[aria-label="Like"]:not([aria-label*="comment" i]), ' +
       'button[aria-label="React Like"]:not([aria-label*="comment" i]), ' +
       'button[aria-label^="React "]:not([aria-label*="comment" i]), ' +
@@ -400,20 +405,22 @@ export class FeedActions {
       };
     }
 
-    // Already reacted? The button reads "Unreact <Reaction>" / aria-pressed=true.
-    // (The old code only matched a "Like"-labelled trigger, so an already-reacted
-    // post wrongly reported "unavailable".)
+    // Already reacted? Current markup: the button reads
+    // "Reaction button state: <Reaction>". Legacy: "Unreact <Reaction>" /
+    // aria-pressed=true. If the CURRENT reaction already equals the requested one,
+    // no-op; if it differs, fall through and switch it via the flyout.
     const curLabel = (await trigger.getAttribute('aria-label').catch(() => '')) ?? '';
     const curPressed = await trigger.getAttribute('aria-pressed').catch(() => null);
-    if (/^unreact/i.test(curLabel) || curPressed === 'true') {
-      const existing = curLabel.replace(/^unreact\s+/i, '').trim() || 'a reaction';
+    const stateMatch = curLabel.match(/reaction button state:\s*(.+)$/i);
+    const current = (
+      stateMatch?.[1] ?? (/^unreact/i.test(curLabel) ? curLabel.replace(/^unreact\s+/i, '') : '')
+    ).trim();
+    if ((current || curPressed === 'true') && new RegExp(`^${label}$`, 'i').test(current)) {
       return {
         success: true,
         reaction,
         outcome: 'already_reacted',
-        message: new RegExp(`unreact\\s+${label}\\b`, 'i').test(curLabel)
-          ? `Post already carries the ${label} reaction.`
-          : `Post already carries a different reaction (${existing}); left unchanged.`,
+        message: `Post already carries the ${label} reaction.`,
       };
     }
 
@@ -424,34 +431,38 @@ export class FeedActions {
     // on an off-screen control silently no-ops on the freshly-navigated page.
     await trigger.scrollIntoViewIfNeeded().catch(() => undefined);
 
-    // Apply: 'like' is a direct click; the others live behind the hover flyout.
-    if (reaction === 'like') {
-      await trigger.click().catch(() => undefined);
-    } else {
-      // The reactions flyout is portaled in on hover (verified by DOM probe: the
-      // entries are `button[aria-label="React <Reaction>"]`). Right after
-      // navigation the hover can fire before LinkedIn wires up the trigger, so
-      // hover then WAIT for the specific reaction to paint, retrying the hover
-      // once rather than relying on a fixed sleep that may be too short.
-      const pick = this.page.locator(`button[aria-label="React ${label}"]`).first();
-      let opened = false;
-      for (let attempt = 0; attempt < 2 && !opened; attempt++) {
-        await trigger.hover().catch(() => undefined);
-        opened = await pick
-          .waitFor({ state: 'visible', timeout: 3000 })
-          .then(() => true)
-          .catch(() => false);
-      }
-      if (!opened) {
-        return {
-          success: false,
-          reaction,
-          outcome: 'unavailable',
-          message: `The "${reaction}" reaction picker did not open for this post.`,
-        };
-      }
-      await pick.click().catch(() => undefined);
+    // Open the reactions flyout by hovering the primary control, then click the
+    // target reaction. Current markup: flyout entries are
+    // `button[aria-label="<Label>"]` (Like/Celebrate/Support/Love/Insightful/
+    // Funny); legacy was "React <Label>". Hovering works for both the
+    // "Open reactions menu" opener and the "Reaction button state: <X>" button.
+    // Retry the hover in case the trigger is still hydrating after navigation.
+    const pick = this.page
+      .locator(`button[aria-label="${label}"], button[aria-label="React ${label}"]`)
+      .first();
+    let opened = false;
+    for (let attempt = 0; attempt < 3 && !opened; attempt++) {
+      await trigger.hover().catch(() => undefined);
+      await sleep(400);
+      opened = await pick
+        .waitFor({ state: 'visible', timeout: 3000 })
+        .then(() => true)
+        .catch(() => false);
     }
+    if (!opened) {
+      return {
+        success: false,
+        reaction,
+        outcome: 'unavailable',
+        message: `The "${reaction}" reaction picker did not open for this post.`,
+      };
+    }
+    // Hover the entry first so the portaled flyout stays open (a bare click can
+    // land as the flyout is dismissing, especially when switching an existing
+    // reaction), then click.
+    await pick.hover().catch(() => undefined);
+    await sleep(250);
+    await pick.click().catch(() => undefined);
     await sleep(1300);
 
     // VERIFY the reaction actually applied: the post's button must now read
@@ -459,11 +470,14 @@ export class FeedActions {
     // otherwise report failure rather than the previous unconditional success.
     const afterLabel =
       (await this.page
-        .locator('button[aria-label^="Unreact "]:not([aria-label*="comment" i])')
+        .locator(
+          'button[aria-label^="Reaction button state:"]:not([aria-label*="comment" i]), ' +
+            'button[aria-label^="Unreact "]:not([aria-label*="comment" i])',
+        )
         .first()
         .getAttribute('aria-label')
         .catch(() => '')) ?? '';
-    if (!new RegExp(`unreact\\s+${label}\\b`, 'i').test(afterLabel)) {
+    if (!new RegExp(`(reaction button state:\\s*${label}|unreact\\s+${label})\\b`, 'i').test(afterLabel)) {
       return {
         success: false,
         reaction,
@@ -521,11 +535,12 @@ export class FeedActions {
     assertAuthenticated(this.page);
     await rateLimitDelay();
 
-    // The comment composer is a Quill editor (role=textbox, class `ql-editor`,
-    // accessible name "Text editor for creating content" — verified by DOM
-    // probe). On a post permalink it is usually present already; if not, the
-    // "Comment" action button reveals it.
-    let editor = this.page.locator('div.ql-editor[contenteditable="true"]').first();
+    // The comment composer is a rich-text editor (role=textbox, accessible name
+    // "Text editor for creating comment"). LinkedIn migrated it from Quill
+    // (`div.ql-editor`) to TipTap/ProseMirror (`div.ProseMirror`), so match both.
+    // On a post permalink it is usually present already; if not, the "Comment"
+    // action button reveals it.
+    let editor = this.page.locator('div.ql-editor[contenteditable="true"], div.ProseMirror[contenteditable="true"], [role="textbox"][aria-label*="creating comment" i]').first();
     if ((await editor.count()) === 0) {
       const commentBtn = this.page
         .locator('button[aria-label="Comment"], button[aria-label*="Comment" i]')
@@ -534,7 +549,7 @@ export class FeedActions {
         await commentBtn.click().catch(() => undefined);
         await sleep(1200);
       }
-      editor = this.page.locator('div.ql-editor[contenteditable="true"]').first();
+      editor = this.page.locator('div.ql-editor[contenteditable="true"], div.ProseMirror[contenteditable="true"], [role="textbox"][aria-label*="creating comment" i]').first();
     }
     if ((await editor.count()) === 0) {
       throw new ActionError('Comment composer did not open.', 'composer_missing');
@@ -574,24 +589,51 @@ export class FeedActions {
     // `:has-text("Post")`, which substring-matches the "Repost" button (and that
     // sits earlier in the DOM, so `.first()` would click the wrong control).
     await rateLimitDelay();
-    const submit = this.page
-      .locator(
-        'button.comments-comment-box__submit-button--cr, ' +
-          'button.comments-comment-box__submit-button, ' +
-          'button[aria-label="Post comment"]',
-      )
-      .first();
+    // The submit control is a `type=submit` button inside the composer's form.
+    // LinkedIn now hashes its class names (e.g. "_3bc34f41 …"), so prefer the
+    // editor's own <form>, then a page-level submit, then legacy stable classes.
+    let submit = editor.locator('xpath=ancestor::form[1]').locator('button[type="submit"]').first();
+    if ((await submit.count()) === 0) {
+      submit = this.page.locator('button[type="submit"]').last();
+    }
+    if ((await submit.count()) === 0) {
+      submit = this.page
+        .locator(
+          'button.comments-comment-box__submit-button--cr, ' +
+            'button.comments-comment-box__submit-button, ' +
+            'button[class*="comments-comment-box__submit"], ' +
+            'button[aria-label="Post comment"]',
+        )
+        .first();
+    }
     if ((await submit.count()) === 0) {
       throw new ActionError('Comment submit button not found.', 'submit_missing');
     }
     await submit.scrollIntoViewIfNeeded().catch(() => undefined);
+    // LinkedIn keeps the submit button disabled until the editor registers
+    // content, so wait for it to enable before clicking.
+    for (let i = 0; i < 12; i++) {
+      const disabled =
+        (await submit.isDisabled().catch(() => false)) ||
+        (await submit.getAttribute('aria-disabled').catch(() => null)) === 'true';
+      if (!disabled) break;
+      await sleep(300);
+    }
     await submit.click({ force: true }).catch(() => undefined);
-    await sleep(1800);
+    await sleep(1500);
 
     // VERIFY: LinkedIn clears the composer on a successful post. If the editor
-    // still holds our text, the comment did NOT post — report that honestly
-    // instead of a false success (the original bug).
-    const remaining = await editor.innerText().catch(() => '');
+    // still holds our text, the button click didn't take — fall back to the
+    // Cmd/Ctrl+Enter submit shortcut from inside the editor, then re-check.
+    let remaining = await editor.innerText().catch(() => '');
+    if (remaining.trim().length > 0) {
+      await editor.click({ force: true }).catch(() => undefined);
+      await this.page.keyboard.press('Meta+Enter').catch(() => undefined);
+      await sleep(600);
+      await this.page.keyboard.press('Control+Enter').catch(() => undefined);
+      await sleep(1500);
+      remaining = await editor.innerText().catch(() => '');
+    }
     const cleared = remaining.trim().length === 0;
     if (!cleared) {
       return {
