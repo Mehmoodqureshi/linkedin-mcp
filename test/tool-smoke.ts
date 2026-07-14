@@ -21,6 +21,7 @@ interface Call {
 
 const CALLS: Call[] = [
   { tool: 'linkedin_status', args: {} },
+  { tool: 'linkedin_get_quota', args: {} },
   { tool: 'linkedin_get_profile', args: { profileUrl: PROFILE } },
   { tool: 'linkedin_search_people', args: { query: 'software engineer san francisco' } },
   { tool: 'linkedin_search_jobs', args: { query: 'typescript backend remote' } },

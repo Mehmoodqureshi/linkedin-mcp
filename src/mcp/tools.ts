@@ -38,6 +38,7 @@ import { type CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 import { getInstance, type LinkedInDriver } from '../driver/linkedin';
 import type { ReactionType } from '../driver/actions';
+import { getQuotaManager } from '../driver/quota';
 import { isMutatingTool, mutationAllowed } from './mutation-gate';
 
 // ---------------------------------------------------------------------------
@@ -406,6 +407,16 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       'timestamp, unread state).',
     inputSchema: {},
   },
+  {
+    name: 'linkedin_get_quota',
+    description:
+      "Report today's usage of the daily safety caps on mutating actions " +
+      '(connection, message, reaction, comment). Returns each action with its ' +
+      'used count, cap, and remaining budget. Read-only and requires no login — ' +
+      'call it before a batch of writes to see how much headroom is left before ' +
+      'an action would be blocked to protect the account.',
+    inputSchema: {},
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -673,6 +684,20 @@ export const TOOL_HANDLERS: Record<string, ToolHandler> = {
     const driver = await withAuthedDriver();
     const result = await driver.messages.getConversations();
     return jsonResult(result);
+  },
+
+  // --- Quota (read-only, browser-free) -----------------------------------
+  linkedin_get_quota: async () => {
+    // Purely reads the persisted counters; no driver/browser or login needed,
+    // so this answers even before the first login or if Chromium can't launch.
+    const rows = await getQuotaManager().snapshot();
+    const quota = rows.map(({ action, used, cap }) => ({
+      action,
+      used,
+      cap,
+      remaining: Math.max(0, cap - used),
+    }));
+    return jsonResult(quota);
   },
 
   // --- Connections --------------------------------------------------------
