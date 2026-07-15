@@ -77,6 +77,26 @@ function today(): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
+/**
+ * ISO-8601 timestamp of the next local-midnight rollover, when today's counts
+ * reset to zero. Callers surface this so an agent planning a batch of writes
+ * knows exactly when the daily budget refreshes. Pure of process state (accepts
+ * an explicit `from`) so it's trivially testable and honours month/year
+ * boundaries via the Date constructor's normalization.
+ */
+export function nextResetAt(from: Date = new Date()): string {
+  const next = new Date(
+    from.getFullYear(),
+    from.getMonth(),
+    from.getDate() + 1,
+    0,
+    0,
+    0,
+    0,
+  );
+  return next.toISOString();
+}
+
 function capFor(action: QuotaAction): number {
   const envKey = `LINKEDIN_CAP_${action.toUpperCase()}`;
   const raw = Number(process.env[envKey]);

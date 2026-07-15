@@ -38,7 +38,7 @@ import { type CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 import { getInstance, type LinkedInDriver } from '../driver/linkedin';
 import type { ReactionType } from '../driver/actions';
-import { getQuotaManager } from '../driver/quota';
+import { getQuotaManager, nextResetAt } from '../driver/quota';
 import { isMutatingTool, mutationAllowed } from './mutation-gate';
 
 // ---------------------------------------------------------------------------
@@ -412,9 +412,11 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     description:
       "Report today's usage of the daily safety caps on mutating actions " +
       '(connection, message, reaction, comment). Returns each action with its ' +
-      'used count, cap, and remaining budget. Read-only and requires no login — ' +
-      'call it before a batch of writes to see how much headroom is left before ' +
-      'an action would be blocked to protect the account.',
+      'used count, cap, remaining budget, and resetsAt (ISO-8601 local-midnight ' +
+      'rollover when the counters reset to zero). Read-only and requires no ' +
+      'login — call it before a batch of writes to see how much headroom is left ' +
+      'before an action would be blocked to protect the account, and when the ' +
+      'budget next refreshes.',
     inputSchema: {},
   },
 ];
@@ -691,11 +693,16 @@ export const TOOL_HANDLERS: Record<string, ToolHandler> = {
     // Purely reads the persisted counters; no driver/browser or login needed,
     // so this answers even before the first login or if Chromium can't launch.
     const rows = await getQuotaManager().snapshot();
+    // Same rollover instant for every row: when the local calendar date flips,
+    // all counters reset together. Surfacing it lets a caller decide whether to
+    // pause a batch until the budget refreshes rather than hit a hard block.
+    const resetsAt = nextResetAt();
     const quota = rows.map(({ action, used, cap }) => ({
       action,
       used,
       cap,
       remaining: Math.max(0, cap - used),
+      resetsAt,
     }));
     return jsonResult(quota);
   },

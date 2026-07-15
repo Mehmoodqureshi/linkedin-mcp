@@ -9,7 +9,7 @@ import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { QuotaManager, QuotaError } from '../src/driver/quota';
+import { QuotaManager, QuotaError, nextResetAt } from '../src/driver/quota';
 
 /** A unique quota-file path per manager so tests never share state. */
 let seq = 0;
@@ -79,6 +79,26 @@ test('enforce throws QuotaError once the cap is reached', async () => {
     if (prev === undefined) delete process.env.LINKEDIN_CAP_CONNECTION;
     else process.env.LINKEDIN_CAP_CONNECTION = prev;
   }
+});
+
+test('nextResetAt returns the next local midnight for a mid-day time', () => {
+  // 2026-07-14 15:30 local -> resets at 2026-07-15 00:00 local.
+  const iso = nextResetAt(new Date(2026, 6, 14, 15, 30, 0));
+  assert.equal(new Date(iso).getTime(), new Date(2026, 6, 15, 0, 0, 0, 0).getTime());
+});
+
+test('nextResetAt normalizes month and year boundaries', () => {
+  // A minute before New Year rolls over into the next year at midnight.
+  const iso = nextResetAt(new Date(2026, 11, 31, 23, 59, 0));
+  assert.equal(new Date(iso).getTime(), new Date(2027, 0, 1, 0, 0, 0, 0).getTime());
+});
+
+test('the quota tool payload carries a resetsAt in the future', () => {
+  // The mapped row shape the linkedin_get_quota tool serializes.
+  const resetsAt = nextResetAt(new Date(2026, 6, 14, 9, 0, 0));
+  const row = { action: 'connection', used: 5, cap: 40, remaining: 35, resetsAt };
+  assert.equal(row.resetsAt, resetsAt);
+  assert.ok(new Date(resetsAt).getTime() > new Date(2026, 6, 14, 9, 0, 0).getTime());
 });
 
 test('an invalid env cap override falls back to the default cap', async () => {
