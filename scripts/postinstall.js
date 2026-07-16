@@ -22,9 +22,22 @@
 'use strict';
 
 const { execFileSync } = require('node:child_process');
+const { dirname, join } = require('node:path');
 
 function run(cmd, args) {
   execFileSync(cmd, args, { stdio: 'inherit' });
+}
+
+/**
+ * Absolute path to Playwright's CLI entrypoint.
+ *
+ * Resolved via `package.json` + join rather than `require.resolve('playwright/cli')`:
+ * Playwright's `exports` map has no `./cli` subpath, so the latter throws
+ * ERR_PACKAGE_PATH_NOT_EXPORTED on every platform. `cli.js` is the package's own
+ * `bin` target, so its location is stable.
+ */
+function playwrightCli() {
+  return join(dirname(require.resolve('playwright/package.json')), 'cli.js');
 }
 
 function has(moduleName) {
@@ -50,19 +63,16 @@ function installChromium() {
     return;
   }
   try {
-    // `playwright` is a direct dependency, so its CLI is on PATH for scripts.
-    run('playwright', ['install', 'chromium']);
-  } catch {
-    try {
-      // Fallback: invoke through the installed module if the bin shim is missing.
-      run(process.execPath, [require.resolve('playwright/cli'), 'install', 'chromium']);
-    } catch (err) {
-      process.stderr.write(
-        '[postinstall] WARNING: could not download Chromium automatically: ' +
-          String(err && err.message ? err.message : err) +
-          '\n[postinstall] Run `npx playwright install chromium` before first use.\n',
-      );
-    }
+    // Invoke the CLI through node itself. Going via the `playwright` bin shim
+    // would fail on Windows, where it is `playwright.cmd` and execFileSync
+    // cannot spawn a .cmd without a shell.
+    run(process.execPath, [playwrightCli(), 'install', 'chromium']);
+  } catch (err) {
+    process.stderr.write(
+      '[postinstall] WARNING: could not download Chromium automatically: ' +
+        String(err && err.message ? err.message : err) +
+        '\n[postinstall] Run `npx playwright install chromium` before first use.\n',
+    );
   }
 }
 
@@ -71,7 +81,11 @@ function installAppDeps() {
   // electron-builder is a devDependency they never install.
   if (!has('electron-builder')) return;
   try {
-    run('electron-builder', ['install-app-deps']);
+    // shell:true so the electron-builder.cmd shim is spawnable on Windows.
+    execFileSync('electron-builder', ['install-app-deps'], {
+      stdio: 'inherit',
+      shell: process.platform === 'win32',
+    });
   } catch (err) {
     process.stderr.write(
       '[postinstall] electron-builder install-app-deps failed (non-fatal): ' +

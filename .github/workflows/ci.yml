@@ -8,12 +8,21 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest]
         node-version: [18, 20, 22]
-    name: Node ${{ matrix.node-version }}
+        # One Windows job guards against POSIX-only assumptions (`ps`, .cmd bin
+        # shims) regressing for native-Windows users.
+        include:
+          - os: windows-latest
+            node-version: 22
+    name: ${{ matrix.os }} / Node ${{ matrix.node-version }}
+    env:
+      # The driver's Chromium isn't needed for typecheck/build/unit tests.
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
     steps:
       - uses: actions/checkout@v4
 

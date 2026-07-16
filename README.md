@@ -8,8 +8,6 @@ A local Electron desktop app that drives **LinkedIn** through a real, Playwright
 
 Instead of using LinkedIn's (restricted) official API, the app logs in as you in a real browser window, keeps the session alive on disk, and lets an AI assistant call a small set of well-defined tools (view a profile, search people/jobs/companies, send a message, send a connection request, read the feed and notifications, etc.). You stay in control: login is manual and headed, so you complete any 2FA/captcha yourself, and your password is never stored.
 
-> **Heads-up / status:** this repository currently has a number of wiring bugs between the Electron main process and the driver/MCP layers (mismatched import paths, method names, and constructor signatures). See the "Known issues" section at the bottom. The README below describes the *intended* design and usage.
-
 ---
 
 ## What it does
@@ -113,6 +111,25 @@ MCP clients discover servers from a JSON config — for Claude Desktop:
 ```
 
 Optional `env` overrides: `LINKEDIN_MCP_USERDATA` (data/profile dir, default `~/.linkedin-mcp`) and `LINKEDIN_HEADLESS=1` (run Chromium headless — but keep it headed for the first login).
+
+### Windows
+
+WSL2 is **not** required — native Windows works. One config change is, though: on Windows `npx` is `npx.cmd`, a batch shim, and MCP hosts spawn the server without a shell, which cannot execute a `.cmd`. So `"command": "npx"` fails to start. Wrap it in `cmd /c`:
+
+```json
+{
+  "mcpServers": {
+    "linkedin": {
+      "command": "cmd",
+      "args": ["/c", "npx", "-y", "@mehmoodqureshi/linkedin-mcp"]
+    }
+  }
+}
+```
+
+Or: `claude mcp add linkedin -- cmd /c npx -y @mehmoodqureshi/linkedin-mcp`
+
+If the Chromium download was skipped during install, run `npx playwright install chromium` once before first use.
 
 ### Alternative — Electron desktop app (from a source checkout)
 
@@ -220,21 +237,29 @@ src/
 
 ---
 
-## Known issues
+## Write actions are off by default
 
-This codebase does **not** yet build/run cleanly. The main process, the driver facade, and the MCP/IPC layers were written against slightly different APIs. The most important mismatches:
+Every state-changing tool is **deny-by-default**. With `LINKEDIN_ALLOW_MUTATIONS` unset, these are refused:
 
-- **Wrong import paths in `src/main`.** `index.ts` and `ipc-handlers.ts` import `./driver/PlaywrightDriver` and `./mcp/server`, but the real files are `../driver/linkedin` and `../mcp/server`. There is no `PlaywrightDriver` file or `createDriver` export (use `getInstance()` / `LinkedInDriver`).
-- **`linkedin.ts` imports `./actions/messaging`** but the file is `actions/messages.ts`.
-- **Driver facade vs. main process contract drift:** the main process treats the driver as an `EventEmitter` (`driver.on('status', …)`) and reads `getStatus().state`, neither of which the driver provides (`getStatus()` returns `{ status, isLoggedIn, sessionValid }`).
-- **MCP server API:** `index.ts` imports `getMcpStatus` and calls `startMcpServer({ driver, transport })`, but `server.ts` exposes no `getMcpStatus` and `startMcpServer()` takes no arguments.
-- **IPC handler method names don't match the action modules:** e.g. `profile.view` (should be `getProfile`), `search.people/jobs/companies(query, page)` (should be `searchPeople/searchJobs/searchCompanies(query, filters?)`), `connection.sendRequest` (should be `connections.sendConnectionRequest`), `message.send` (should be `messages.sendMessage`), `notifications.list` (should be `feed.getNotifications`), `feed.read` (should be `feed.getFeed`), and `auth.login({email,password})` (should be `login(email, password)`).
-- **`AuthActions` constructor mismatch:** `linkedin.ts` builds `new AuthActions(page, session, {email,password})`, but the constructor is `(page, paths?)`.
-- **`tsconfig.json` path aliases** point at non-existent `src/main/driver`, `src/main/mcp`, `src/shared`.
-- **Packaging assets missing:** `electron-builder.json` references `assets/icon.*`, `build/entitlements.mac.plist`, and `node_modules/playwright-core/.local-browsers` (the project installs `playwright`, not `playwright-core`); `package.json`'s `register-mcp` script points at a non-existent `scripts/register-mcp.ts`.
-- _(Resolved)_ MCP mode detection: the Electron entry now keys off `LINKEDIN_MCP_STDIO=1` / `--mcp` / a non-TTY stdout, matching the config above. The standalone `npx` binary (`dist/cli.js`) needs no such flag — it is always an MCP stdio server.
+`linkedin_send_message`, `linkedin_send_connection`, `linkedin_accept_invitation`, `linkedin_withdraw_invitation`, `linkedin_react`, `linkedin_comment`
 
-Reconcile these before expecting `npm run build` / `npm start` to succeed.
+Opt in with a comma-separated allowlist, or `all` / `*` for everything:
+
+```json
+{
+  "mcpServers": {
+    "linkedin": {
+      "command": "npx",
+      "args": ["-y", "@mehmoodqureshi/linkedin-mcp"],
+      "env": { "LINKEDIN_ALLOW_MUTATIONS": "send_message,react" }
+    }
+  }
+}
+```
+
+Read-only tools (profiles, search, feed, notifications) always work and need no opt-in.
+
+Allowed writes are additionally capped per day — 40 connections, 60 messages, 150 reactions, 30 comments — resetting at local midnight. Call `linkedin_get_quota` to see remaining budget.
 
 ---
 
