@@ -1,0 +1,59 @@
+{
+  "dxt_version": "0.1",
+  "name": "linkedin-mcp",
+  "display_name": "LinkedIn MCP",
+  "version": "0.4.9",
+  "description": "Drive LinkedIn from Claude — view profiles, search people/jobs/companies, message, connect, react, comment, and update your own profile.",
+  "long_description": "A connect-only MCP server that attaches to the LinkedIn desktop app's browser over CDP. Install this bundle in one click; on first use it launches the desktop app (where you log in to LinkedIn once) and drives that same visible session — no Playwright browser download, no hand-edited config. Write actions are disabled by default and gated behind an explicit opt-in.",
+  "author": {
+    "name": "Mehmood Ur Rehman Qureshi"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Mehmoodqureshi/linkedin-mcp.git"
+  },
+  "homepage": "https://github.com/Mehmoodqureshi/linkedin-mcp",
+  "icon": "assets/icon.png",
+  "server": {
+    "type": "node",
+    "entry_point": "dist/cli.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/dist/cli.js"],
+      "env": {
+        "LINKEDIN_ALLOW_MUTATIONS": "${user_config.allow_mutations}"
+      }
+    }
+  },
+  "user_config": {
+    "allow_mutations": {
+      "type": "string",
+      "title": "Enable write actions",
+      "description": "Comma-separated allowlist of write actions to enable (e.g. send_message,comment,update_profile), or \"all\". Leave blank to keep every write action DISABLED (read-only). Write actions affect your real LinkedIn account.",
+      "required": false,
+      "default": ""
+    }
+  },
+  "tools": [
+    { "name": "linkedin_status", "description": "Report driver + login status." },
+    { "name": "linkedin_get_profile", "description": "Open and scrape a member profile." },
+    { "name": "linkedin_update_profile", "description": "Update your own profile (headline, about, name, location). Write action." },
+    { "name": "linkedin_search_people", "description": "Search people with filters." },
+    { "name": "linkedin_search_jobs", "description": "Search job postings." },
+    { "name": "linkedin_search_companies", "description": "Search companies." },
+    { "name": "linkedin_get_feed", "description": "Read home-feed posts." },
+    { "name": "linkedin_get_notifications", "description": "Read notifications." },
+    { "name": "linkedin_send_message", "description": "Send a direct message. Write action." },
+    { "name": "linkedin_send_connection", "description": "Send a connection request. Write action." },
+    { "name": "linkedin_comment", "description": "Comment on a post. Write action." },
+    { "name": "linkedin_react", "description": "React to a post. Write action." }
+  ],
+  "keywords": ["linkedin", "automation", "mcp", "social", "recruiting", "sales"],
+  "compatibility": {
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": {
+      "node": ">=20.0.0"
+    }
+  }
+}

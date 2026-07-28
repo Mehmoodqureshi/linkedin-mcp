@@ -1,6 +1,6 @@
 {
   "name": "@mehmoodqureshi/linkedin-mcp",
-  "version": "0.4.8",
+  "version": "0.5.0",
   "description": "Drive LinkedIn via Playwright and expose it as an MCP server over stdio. Runs standalone (npx) or as an Electron tray app.",
   "author": "Mehmood Ur Rehman Qureshi",
   "license": "MIT",
@@ -61,7 +61,8 @@
     "dist:linux": "npm run gen-icon && npm run build && electron-builder --linux",
     "prepublishOnly": "npm run clean && npm run build",
     "postinstall": "node scripts/postinstall.js",
-    "test:unit": "ts-node --project tsconfig.json test/mutation-gate.test.ts && ts-node --project tsconfig.json test/quota.test.ts"
+    "test:unit": "ts-node --project tsconfig.json test/mutation-gate.test.ts && ts-node --project tsconfig.json test/quota.test.ts && ts-node --project tsconfig.json test/tools-catalog.test.ts",
+    "pack:mcpb": "node scripts/pack-mcpb.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
