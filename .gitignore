@@ -62,3 +62,6 @@ Thumbs.db
 .vscode/*
 !.vscode/extensions.json
 *.swp
+
+# Build artifacts
+*.mcpb

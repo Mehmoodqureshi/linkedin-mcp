@@ -145,6 +145,8 @@ WSL2 is **not** required — native Windows works. One config change is, though:
 
 Or: `claude mcp add linkedin -- cmd /c npx -y @mehmoodqureshi/linkedin-mcp`
 
+The desktop app installs to `%LOCALAPPDATA%\Programs\LinkedIn MCP\` (NSIS, per-user). The server auto-launches it from there on first use; if you installed it to a custom directory, point the server at it with `LINKEDIN_APP_CMD` (e.g. `LINKEDIN_APP_CMD="C:\\path\\to\\LinkedIn MCP.exe"`).
+
 ### Alternative — Electron desktop app (from a source checkout)
 
 Runs the same MCP server embedded in the tray app, so you get a control-panel window alongside it:

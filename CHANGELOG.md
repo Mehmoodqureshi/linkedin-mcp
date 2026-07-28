@@ -1,3 +1,8 @@
+## 0.5.2 - 2026-07-28
+
+- fix: Windows app auto-launch — probe the NSIS install location (%LOCALAPPDATA%\Programs\LinkedIn MCP\LinkedIn MCP.exe) and the Start Menu shortcut instead of a bare app name that never resolved.
+- ci: add a Release workflow (release.yml) that builds the macOS .dmg and Windows .exe installers on their native runners and packs the .mcpb, attaching all three to the GitHub Release for a pushed v* tag.
+
 ## 0.5.1 - 2026-07-28
 
 - chore: depend on playwright-core instead of playwright — the driver only uses connectOverCDP, so no browser binary is ever needed. Fully removes the Chromium download from install (smaller, faster, airtight "no download").

@@ -59,8 +59,10 @@ function main() {
   }
 
   // 3. Production-only deps (no Chromium — connect-only never launches a browser).
+  //    --ignore-scripts: the bundle needs no postinstall (that step is dev-only,
+  //    and its script isn't staged); skipping it is also faster and safer.
   log('installing runtime dependencies (production only)…');
-  run('npm', ['ci', '--omit=dev', '--no-audit', '--no-fund'], {
+  run('npm', ['ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], {
     cwd: stage,
     shell: process.platform === 'win32',
     env: { ...process.env, PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1' },

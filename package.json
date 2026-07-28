@@ -1,6 +1,6 @@
 {
   "name": "@mehmoodqureshi/linkedin-mcp",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Drive LinkedIn via Playwright and expose it as an MCP server over stdio. Runs standalone (npx) or as an Electron tray app.",
   "author": "Mehmood Ur Rehman Qureshi",
   "license": "MIT",

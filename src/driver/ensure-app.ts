@@ -21,8 +21,13 @@
  */
 
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { discoverCdpEndpoint } from './cdp-discovery';
+
+/** The installed app's product name (matches electron-builder productName). */
+const APP_PRODUCT_NAME = 'LinkedIn MCP';
 
 /** Small async sleep. */
 function delay(ms: number): Promise<void> {
@@ -48,10 +53,31 @@ function appLaunchCommand(): [string, string[]] | null {
     const parts = override.split(/\s+/);
     return [parts[0] as string, parts.slice(1)];
   }
-  // Platform defaults target an INSTALLED app named "LinkedIn MCP".
-  if (process.platform === 'darwin') return ['open', ['-a', 'LinkedIn MCP']];
-  if (process.platform === 'win32') return ['cmd', ['/c', 'start', '', 'LinkedIn MCP']];
-  // Linux: rely on an override or a desktop entry on PATH.
+
+  // macOS: launch the installed .app by product name via Launch Services.
+  if (process.platform === 'darwin') return ['open', ['-a', APP_PRODUCT_NAME]];
+
+  // Windows: the NSIS installer (oneClick:false, perMachine:false) puts the exe
+  // under %LOCALAPPDATA%\Programs\<productName>\<productName>.exe and drops a
+  // Start Menu shortcut. `start "" "LinkedIn MCP"` alone does NOT resolve to
+  // either, so probe the concrete install locations and launch the first that
+  // exists; fall back to the bare name (which works if it's on PATH).
+  if (process.platform === 'win32') {
+    const candidates: string[] = [];
+    const local = process.env.LOCALAPPDATA;
+    if (local) candidates.push(join(local, 'Programs', APP_PRODUCT_NAME, `${APP_PRODUCT_NAME}.exe`));
+    const appData = process.env.APPDATA;
+    if (appData) {
+      candidates.push(
+        join(appData, 'Microsoft', 'Windows', 'Start Menu', 'Programs', `${APP_PRODUCT_NAME}.lnk`),
+      );
+    }
+    const found = candidates.find((p) => existsSync(p));
+    // `start "" "<target>"` launches an .exe or resolves a .lnk shortcut.
+    return ['cmd', ['/c', 'start', '', found ?? APP_PRODUCT_NAME]];
+  }
+
+  // Linux: rely on an override or a desktop entry / AppImage on PATH.
   return ['linkedin-mcp-app', []];
 }
 
