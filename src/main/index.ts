@@ -21,6 +21,7 @@
 import { app, BrowserWindow, Menu, Tray, nativeImage, shell, ipcMain } from 'electron';
 import { join } from 'node:path';
 
+import { advertiseCdpEndpoint, clearCdpEndpoint } from '../driver/cdp-discovery';
 import { getInstance, type LinkedInDriver } from '../driver/linkedin';
 import {
   startMcpServer,
@@ -91,7 +92,9 @@ const isDev = !app.isPackaged;
  *     websocket handshake on Chromium ≥115 (otherwise it is refused).
  *   - `disable-blink-features=AutomationControlled` trims the automation tell.
  *
- * We skip all of this in MCP mode, where the driver launches its own Chromium.
+ * We skip all of this in MCP mode: that process doesn't own a BrowserView. The
+ * driver is connect-only, so an MCP-mode process attaches to a running UI-mode
+ * app's Chromium (via the advertised CDP endpoint) rather than opening its own.
  *
  * SECURITY NOTE: the debug port lets ANY local process that finds it attach to
  * Chromium and drive the logged-in LinkedIn session. We bind to localhost and
@@ -372,15 +375,19 @@ async function bootstrap(): Promise<void> {
   //    sign-in) accept it where they reject headless. Snappy ops: no per-op
   //    slowMo for the interactive view. Explicit env always wins.
   if (!isMcpMode) {
-    if (process.env.LINKEDIN_BROWSER_MODE === undefined) {
-      process.env.LINKEDIN_BROWSER_MODE = 'connect';
-    }
+    // The driver is connect-only; point it at this app's CDP endpoint. (An
+    // explicit env always wins, e.g. when attaching to another instance.)
     if (process.env.LINKEDIN_CDP_ENDPOINT === undefined) {
       process.env.LINKEDIN_CDP_ENDPOINT = CDP_ENDPOINT;
     }
     if (process.env.LINKEDIN_SLOWMO === undefined) {
       process.env.LINKEDIN_SLOWMO = '0';
     }
+    // Advertise our CDP endpoint so a SEPARATE driver process (npx / an MCP
+    // client's stdio server) can discover and attach to this visible app instead
+    // of failing — the driver is connect-only and never launches its own browser.
+    // Cleared on quit (see 'will-quit'); a stale advert is dropped by pid check.
+    advertiseCdpEndpoint(CDP_ENDPOINT, CDP_PORT);
   }
 
   // 1. Create the driver singleton (lazy browser attach/launch happens inside).
@@ -506,6 +513,7 @@ app.on('will-quit', (event) => {
   event.preventDefault();
   void (async () => {
     try {
+      clearCdpEndpoint();
       embedded?.unregisterIpc();
       embedded?.destroy();
       unregisterIpcHandlers();

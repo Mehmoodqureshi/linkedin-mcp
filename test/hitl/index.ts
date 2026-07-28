@@ -3,13 +3,13 @@
  * harness.
  *
  * Flow (see the design doc):
- *   1. parseArgs()  -> CliOptions (--only / --include-mutating / --headed|--headless)
+ *   1. parseArgs()  -> CliOptions (--only / --include-mutating)
  *   2. loadTargets() reads + validates test-targets.json (gitignored). Missing
  *      file -> friendly pointer to test-targets.example.json + exit(1).
  *   3. Create test-results/<timestamp>/ run dir (colons in the ISO timestamp
  *      replaced with dashes so it is a valid path segment on every OS).
- *   4. Force headed mode by setting LINKEDIN_HEADLESS BEFORE getInstance() — the
- *      driver reads this env in its constructor — then launch().
+ *   4. getInstance() + launch() — the connect-only driver attaches to the running
+ *      LinkedIn desktop app over CDP (auto-discovered). Start the app first.
  *   5. Assert we are logged in; if not, prompt the human to log in in the visible
  *      window and press Enter, then re-check via auth.isLoggedIn().
  *   6. Run the selected scenario suites through the Runner. Read-only steps run
@@ -282,15 +282,9 @@ async function main(): Promise<void> {
   process.env.HITL_RESULTS_DIR = runDir;
   process.stderr.write(`[hitl] results dir: ${runDir}\n`);
 
-  // 4. Force headed mode BEFORE getInstance() — the driver reads env in its ctor.
-  process.env.LINKEDIN_HEADLESS = options.headed ? '0' : '1';
-  if (!options.headed) {
-    process.stderr.write(
-      '[hitl] WARNING: --headless set; mutations would not be visually observable.\n',
-    );
-  }
-
-  // Import the facade only AFTER the env is set.
+  // 4. The driver is connect-only: it attaches to the running LinkedIn desktop
+  //    app over CDP (auto-discovered) rather than launching its own browser.
+  //    Start the app before running HITL; mutations are observed in that window.
   const { getInstance } = await import('../../src/driver/linkedin');
   const driver = getInstance();
 

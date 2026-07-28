@@ -1,18 +1,18 @@
 /**
  * SessionManager — persistence + validation of the LinkedIn Playwright session.
  *
- * The persistent Chromium profile (owned by BrowserManager) is the primary
- * session mechanism: cookies, localStorage and IndexedDB all live on disk in
- * the profile directory and survive app restarts on their own.
+ * The desktop app's persistent Electron `BrowserView` session partition is the
+ * primary session mechanism: cookies, localStorage and IndexedDB all live on
+ * disk and survive app restarts on their own. The connect-only driver attaches
+ * to that browser rather than owning a profile of its own.
  *
- * This module adds a SECOND layer on top of that profile: a portable,
- * inspectable `storageState` artifact written to
- * `app.getPath('userData')/linkedin-session.json`. It gives us:
+ * This module adds a SECOND layer: a portable, inspectable `storageState`
+ * artifact written to `app.getPath('userData')/linkedin-session.json`. It gives
+ * us:
  *
  *   (a) a fast, browser-free way to answer "are we logged in?" by inspecting
- *       the `li_at` cookie + its expiry, without launching Chromium;
- *   (b) a recovery path: if the persistent profile is corrupted we can launch a
- *       fresh context and re-inject cookies via `context.addCookies(...)`;
+ *       the `li_at` cookie + its expiry, without attaching to Chromium;
+ *   (b) a portable snapshot of the session cookies for inspection / migration;
  *   (c) a stable, human-inspectable session file for debugging.
  *
  * Everything here is defensive: a missing / malformed file is treated as "no

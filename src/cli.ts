@@ -14,6 +14,11 @@
  * `$LINKEDIN_MCP_USERDATA` or `~/.linkedin-mcp` when it is absent), so nothing
  * here pulls Electron in.
  *
+ * The driver is CONNECT-ONLY: it never launches its own Chromium. It attaches
+ * over CDP to the running LinkedIn desktop app (auto-discovered, or via
+ * `$LINKEDIN_CDP_ENDPOINT`). With no app running, tool calls fail with an
+ * actionable "start the app" error.
+ *
  * CRITICAL: in stdio mode, stdout carries the JSON-RPC stream. Never write
  * human-readable text to stdout — all diagnostics go to stderr. Help/version
  * output is fine because those exit before the server starts.
@@ -56,11 +61,14 @@ function printHelp(): void {
       `      }\n` +
       `    }\n` +
       `  }\n\n` +
+      `This server is connect-only: it drives the LinkedIn DESKTOP APP's browser\n` +
+      `over CDP and never launches its own. Start the LinkedIn app first; this\n` +
+      `server auto-discovers and attaches to it. Without a running app, actions\n` +
+      `fail with a "start the app" message.\n\n` +
       `Environment:\n` +
       `  LINKEDIN_MCP_USERDATA   Override the data dir (default: ~/.linkedin-mcp)\n` +
-      `  LINKEDIN_HEADLESS=1     Launch Chromium headless (default: headed, so you\n` +
-      `                          can complete the one-time manual login)\n` +
-      `  LINKEDIN_USER_DATA_DIR  Alias for the driver's persistent profile dir\n` +
+      `  LINKEDIN_CDP_ENDPOINT   CDP endpoint of the app to attach to (default:\n` +
+      `                          auto-discovered from a running app)\n` +
       `  LINKEDIN_ALLOW_MUTATIONS  Comma-separated allowlist of write actions to enable\n` +
       `                          (e.g. send_message,react) or "all". Write actions\n` +
       `                          (message/connect/comment/react/invitations) are\n` +

@@ -4,9 +4,10 @@
  * Supported flags:
  *   --only <csv>          run only the named scenario groups (e.g. --only profile,search)
  *   --include-mutating    opt in to MUTATING steps (off by default; default run is read-only)
- *   --headed              force a visible browser (default — HITL requires headed)
- *   --headless            override to a headless browser (NOT recommended; mutations not observable)
  *   --help, -h            print usage and exit
+ *
+ * The driver is connect-only and attaches to the always-visible desktop app;
+ * there is no headless mode. Start the LinkedIn app before running HITL.
  *
  * parseArgs never throws on unknown flags — it ignores them so the harness stays
  * forgiving; --help/-h is detected by the caller (it returns `help: true`).
@@ -17,7 +18,10 @@ export interface CliOptions {
   only: string[] | null;
   /** Whether MUTATING steps are allowed to execute (still per-step gated). */
   includeMutating: boolean;
-  /** Whether the browser runs headed. HITL forces this true unless --headless. */
+  /**
+   * Always true — the driver is connect-only and drives the visible desktop app.
+   * Retained (rather than removed) so the run report keeps recording headed mode.
+   */
   headed: boolean;
   /** True when --help/-h was passed; caller should printHelp() and exit(0). */
   help: boolean;
@@ -38,9 +42,10 @@ Options:
                         reactToPost, commentOnPost, logout).
                         OFF by default. Even when set, every mutating step requires a
                         per-step typed 'yes' confirmation against a config-supplied target.
-  --headed              Run with a visible browser window (default; required for HITL).
-  --headless            Run without a visible window (override; mutations not observable).
   --help, -h            Show this help and exit.
+
+The driver attaches to the running LinkedIn desktop app (always visible); there
+is no headless mode. Start the app before running HITL.
 
 Examples:
   npm run test:hitl -- --only profile,search
@@ -59,7 +64,7 @@ export function parseArgs(argv: string[]): CliOptions {
   const opts: CliOptions = {
     only: null,
     includeMutating: false,
-    // HITL defaults to headed; --headless flips it.
+    // Connect-only driver: the desktop app is always visible. No headless mode.
     headed: true,
     help: false,
   };
@@ -76,14 +81,6 @@ export function parseArgs(argv: string[]): CliOptions {
 
       case '--include-mutating':
         opts.includeMutating = true;
-        break;
-
-      case '--headed':
-        opts.headed = true;
-        break;
-
-      case '--headless':
-        opts.headed = false;
         break;
 
       case '--only': {

@@ -2,113 +2,40 @@
  * BrowserManager — owns the single Playwright-controlled Chromium that drives
  * LinkedIn.
  *
- * This is NOT an Electron BrowserWindow. It is a real Chromium child process
- * launched via `chromium.launchPersistentContext()`, which gives us the full
- * Playwright API (locators, auto-waiting, network interception, storageState)
- * and a persistent on-disk profile under
- * `app.getPath('userData')/playwright-profile`.
+ * The driver is CONNECT-ONLY: it never launches its own Chromium. It attaches
+ * over CDP (`chromium.connectOverCDP`) to a Chromium we did NOT start — the
+ * desktop app's in-app Electron `BrowserView`. The action modules then drive the
+ * SAME page the user sees natively (no screencast, no headless browser). The
+ * browser's lifecycle is owned by Electron, so we attach and re-point at its
+ * single page but NEVER close it.
  *
  * Because LinkedIn is single-session and flags parallel tabs / rapid bursts,
- * there is exactly one BrowserManager, one persistent context, and a small page
- * pool with a designated PRIMARY page that all navigation defaults to.
+ * there is exactly one BrowserManager and one designated PRIMARY page (the
+ * in-app view) that all navigation defaults to.
  *
- * Session strategy (two layers):
- *   - Primary:  the persistent profile keeps cookies/localStorage/IndexedDB on
- *               disk between runs, so a logged-in session survives restarts.
- *   - Secondary: on close we additionally export `storageState` to
- *               `userData/linkedin-session.json` (via SessionManager) for fast,
- *               browser-free validation and corruption recovery. On launch, if
- *               that artifact exists we re-inject its cookies as a belt-and-
- *               braces restore on top of the persistent profile.
+ * Session strategy:
+ *   - The Electron `BrowserView` uses a persistent session partition, so the
+ *     logged-in LinkedIn session lives on disk and survives app restarts.
+ *   - On close we export `storageState` to `userData/linkedin-session.json` (via
+ *     SessionManager) for fast, browser-free validation and debugging.
  *
  * Events (EventEmitter):
- *   - 'launched'      (context: BrowserContext)
+ *   - 'launched'      (context: BrowserContext)   — kept for API compatibility;
+ *                      fires when we have (re)attached and located the page.
  *   - 'closed'        ()
  *   - 'page-created'  (page: Page)
  *
- * Strict TypeScript, defensive error handling, idempotent launch/close.
+ * Strict TypeScript, defensive error handling, idempotent attach/close.
  */
 
-import { execFileSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { existsSync, readlinkSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
 
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
-
-/** Chromium singleton lock files written into a persistent profile directory. */
-const SINGLETON_FILES = ['SingletonLock', 'SingletonSocket', 'SingletonCookie'];
 
 /** Small async sleep used while polling for the in-app page target. */
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
-
-/**
- * Inspect a profile's `SingletonLock` (a `<host>-<pid>` symlink Chromium writes)
- * to decide whether a LIVE process still owns the profile. Returns `{alive,pid}`.
- * If the lock is missing/unreadable or the pid can't be parsed, it is treated as
- * NOT alive (stale) so recovery can proceed. Pid reuse is possible but rare; the
- * conservative failure is to report "alive" and surface a clear error rather than
- * corrupt a profile in genuine concurrent use.
- */
-function inspectProfileLock(profileDir: string): { alive: boolean; pid: number | null } {
-  try {
-    const lockPath = join(profileDir, 'SingletonLock');
-    if (!existsSync(lockPath)) return { alive: false, pid: null };
-    const target = readlinkSync(lockPath); // e.g. "MyHost-12345"
-    const pid = Number.parseInt(target.slice(target.lastIndexOf('-') + 1), 10);
-    if (!Number.isInteger(pid) || pid <= 0) return { alive: false, pid: null };
-    try {
-      process.kill(pid, 0); // throws ESRCH if the process is gone
-      return { alive: true, pid };
-    } catch (e) {
-      // EPERM = process exists but owned by another user (still alive); else dead.
-      return { alive: (e as NodeJS.ErrnoException).code === 'EPERM', pid };
-    }
-  } catch {
-    return { alive: false, pid: null };
-  }
-}
-
-/** Remove Chromium singleton lock files so a fresh launch can claim the profile. */
-function clearProfileLocks(profileDir: string): void {
-  for (const name of SINGLETON_FILES) {
-    try {
-      rmSync(join(profileDir, name), { force: true });
-    } catch {
-      /* best effort — a missing/locked file must never block recovery */
-    }
-  }
-}
-
-/**
- * Whether `pid` is a Chromium/Chrome-for-Testing process. Used before killing a
- * lock owner: the profile dir is dedicated to this driver, so a Chromium holding
- * it is our own orphan and safe to terminate — but we must never kill an
- * unrelated process that happens to have reused the pid.
- */
-function isChromiumProcess(pid: number): boolean {
-  // Windows has no `ps`; tasklist is the equivalent and is a real .exe, so it
-  // needs no shell. Its CSV row leads with the image name (e.g. "chrome.exe"),
-  // and the no-match case prints an INFO line that fails the same test.
-  const [cmd, args] =
-    process.platform === 'win32'
-      ? ['tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH']]
-      : ['ps', ['-p', String(pid), '-o', 'command=']];
-  try {
-    const out = execFileSync(cmd, args as string[], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
-    return /chrom(e|ium)|Chrome for Testing/i.test(out);
-  } catch {
-    return false; // lookup failed / no such process — treat as not-ours, don't kill.
-  }
-}
-
-/** The options object accepted by `chromium.launchPersistentContext`. */
-type PersistentContextOptions = Parameters<typeof chromium.launchPersistentContext>[1];
 
 import { getSessionManager, SessionManager } from './session';
 
@@ -116,56 +43,33 @@ import { getSessionManager, SessionManager } from './session';
 // Configuration
 // ---------------------------------------------------------------------------
 
-/** Sub-directory (under userData) that holds the persistent Chromium profile. */
-const PROFILE_DIR_NAME = 'playwright-profile';
-
-/**
- * A recent, real Chrome user-agent. Pinning a believable UA (rather than the
- * Playwright/HeadlessChrome default) is part of reducing the automation
- * fingerprint. Bump this periodically to track shipping Chrome.
- */
-const PINNED_USER_AGENT =
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ' +
-  '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
-
 /** Init script that strips the `navigator.webdriver` tell. */
 const STEALTH_INIT_SCRIPT = `
   Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
 `;
 
-/**
- * How the manager obtains its Chromium:
- *   - 'launch'  — spawn a dedicated Playwright Chromium via
- *                 `launchPersistentContext` (the MCP / npx / headless path).
- *   - 'connect' — attach over CDP to a Chromium we did NOT launch (the Electron
- *                 in-app `BrowserView`). There is exactly one page (the view);
- *                 the browser's lifecycle is owned by Electron, not by us, so we
- *                 must never close it.
- */
-export type BrowserMode = 'launch' | 'connect';
-
-/** Hosts considered "LinkedIn" when locating the in-app page in connect mode. */
+/** Hosts considered "LinkedIn" when locating the in-app page. */
 const LINKEDIN_HOST_RE = /(^|\.)linkedin\.com$/i;
 
-/** Tunable launch knobs. The defaults match the project's brief. */
+/** Tunable knobs for the CDP attachment. */
 export interface BrowserManagerOptions {
-  /** Acquisition strategy. Default 'launch'. */
-  mode?: BrowserMode;
   /**
-   * CDP endpoint to attach to in 'connect' mode, e.g. `http://127.0.0.1:47872`.
-   * Ignored in 'launch' mode; required in 'connect' mode.
+   * CDP endpoint to attach to, e.g. `http://127.0.0.1:47872`. When omitted, the
+   * manager falls back to `resolveEndpoint` at attach time (which may discover a
+   * running app and/or launch one). If neither yields an endpoint, connecting
+   * fails with an actionable error.
    */
   cdpEndpoint?: string;
-  /** Run with a visible window. Default false per the local-app brief (user sees activity). */
-  headless?: boolean;
+  /**
+   * Lazy resolver invoked at attach time when no explicit `cdpEndpoint` is set.
+   * Returns an endpoint (e.g. by discovering / launching the desktop app) or
+   * null when none is available. Kept lazy so a server that starts before the
+   * app can still attach once the app comes up, and so app-launch only happens
+   * on first real use.
+   */
+  resolveEndpoint?: () => Promise<string | null>;
   /** Slow each Playwright op by N ms — makes activity observable + slightly more human. */
   slowMo?: number;
-  /** Viewport size. Default 1280x800. */
-  viewport?: { width: number; height: number };
-  /** Override the userData root (mainly for tests). Defaults to Electron app userData. */
-  userDataDir?: string;
-  /** Locale forwarded to Chromium. */
-  locale?: string;
   /** Injected SessionManager (defaults to the shared singleton). */
   sessionManager?: SessionManager;
 }
@@ -178,122 +82,55 @@ export interface BrowserManagerEvents {
 }
 
 // ---------------------------------------------------------------------------
-// Electron userData resolution (lazy + defensive)
-// ---------------------------------------------------------------------------
-
-function resolveUserDataDir(): string {
-  try {
-    // Lazy require so this module loads outside Electron (tests / scripts).
-    // eslint-disable-next-line @typescript-eslint/no-var-requires, global-require
-    const electron = require('electron') as typeof import('electron');
-    if (electron.app && typeof electron.app.getPath === 'function') {
-      return electron.app.getPath('userData');
-    }
-  } catch {
-    // Not in Electron — fall through.
-  }
-  return (
-    process.env.LINKEDIN_MCP_USERDATA ??
-    join(process.env.HOME ?? process.env.USERPROFILE ?? process.cwd(), '.linkedin-mcp')
-  );
-}
-
-/**
- * Point Playwright at the Chromium we bundle into the app.
- *
- * `electron-builder` copies `node_modules/playwright-core/.local-browsers` to
- * `Resources/playwright-browsers` (see electron-builder.json `extraResources`).
- * A packaged app cannot reach the developer's `~/…/ms-playwright` cache, so we
- * set `PLAYWRIGHT_BROWSERS_PATH` to the bundled copy BEFORE the first launch —
- * Playwright reads this env var when it resolves the executable. Runs once and
- * only inside a packaged Electron build; the npx/dev paths keep using the cache
- * the postinstall populated, and any pre-set env var wins.
- */
-let bundledBrowsersResolved = false;
-function useBundledBrowsersIfPackaged(): void {
-  if (bundledBrowsersResolved) return;
-  bundledBrowsersResolved = true;
-  if (process.env.PLAYWRIGHT_BROWSERS_PATH) return; // explicit override wins
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires, global-require
-    const electron = require('electron') as typeof import('electron');
-    if (!electron.app?.isPackaged) return;
-    const bundled = join(process.resourcesPath, 'playwright-browsers');
-    if (existsSync(bundled)) {
-      process.env.PLAYWRIGHT_BROWSERS_PATH = bundled;
-    } else {
-      process.stderr.write(
-        `[browser] packaged app but bundled browsers missing at ${bundled}; ` +
-          `falling back to the default Playwright cache.\n`,
-      );
-    }
-  } catch {
-    // Not in Electron — nothing to resolve.
-  }
-}
-
-// ---------------------------------------------------------------------------
 // BrowserManager
 // ---------------------------------------------------------------------------
 
 export class BrowserManager extends EventEmitter {
-  private readonly mode: BrowserMode;
-  private readonly cdpEndpoint: string | undefined;
-  private readonly headless: boolean;
+  private cdpEndpoint: string | undefined;
+  private readonly resolveEndpoint: (() => Promise<string | null>) | undefined;
   private readonly slowMo: number;
-  private readonly viewport: { width: number; height: number };
-  private readonly locale: string;
-  private readonly userDataDir: string;
-  private readonly profileDir: string;
   private readonly session: SessionManager;
 
   /**
-   * The CDP-attached Browser handle in 'connect' mode. We keep it across
-   * `close()`/`launch()` cycles and reuse it rather than re-attaching, since the
-   * underlying Chromium (Electron's) outlives our driver. Null in 'launch' mode
-   * and before the first connect.
+   * The CDP-attached Browser handle. We keep it across `close()`/`launch()`
+   * cycles and reuse it rather than re-attaching, since the underlying Chromium
+   * (Electron's) outlives our driver. Null before the first connect.
    */
   private cdpBrowser: Browser | null = null;
 
-  /** The live persistent context, or null when not launched. */
+  /** The live browser context, or null when not attached. */
   private context: BrowserContext | null = null;
 
-  /** The designated primary page within the pool. */
+  /** The designated primary page (the in-app view). */
   private primaryPage: Page | null = null;
 
   /**
-   * Guards against concurrent `launch()` calls racing to spawn two Chromiums.
-   * The first caller creates the promise; everyone else awaits it.
+   * Guards against concurrent `launch()` calls racing to attach twice. The first
+   * caller creates the promise; everyone else awaits it.
    */
   private launching: Promise<BrowserContext> | null = null;
 
   constructor(options: BrowserManagerOptions = {}) {
     super();
-    this.mode = options.mode ?? 'launch';
     this.cdpEndpoint = options.cdpEndpoint;
-    this.headless = options.headless ?? false;
+    this.resolveEndpoint = options.resolveEndpoint;
     this.slowMo = options.slowMo ?? 50;
-    this.viewport = options.viewport ?? { width: 1280, height: 800 };
-    this.locale = options.locale ?? 'en-US';
-    this.userDataDir = options.userDataDir ?? resolveUserDataDir();
-    this.profileDir = join(this.userDataDir, PROFILE_DIR_NAME);
     this.session = options.sessionManager ?? getSessionManager();
   }
 
   // -- Lifecycle ----------------------------------------------------------
 
-  /** True when a persistent context is currently live. */
+  /** True when a context is currently attached. */
   public isLaunched(): boolean {
     return this.context !== null;
   }
 
   /**
-   * Launch (or return the already-live) persistent Chromium context.
+   * Attach to (or return the already-attached) Chromium context over CDP.
    *
-   * Idempotent: repeated calls return the same context. Concurrent calls share
-   * a single in-flight launch. On first launch we optionally re-inject cookies
-   * from the persisted storageState artifact as a recovery belt over the
-   * persistent profile.
+   * Idempotent: repeated calls return the same context. Concurrent calls share a
+   * single in-flight attach. Named `launch()` for compatibility with callers,
+   * but it never spawns a browser — it connects to the running app's.
    */
   public async launch(): Promise<BrowserContext> {
     if (this.context) {
@@ -303,7 +140,7 @@ export class BrowserManager extends EventEmitter {
       return this.launching;
     }
 
-    this.launching = this.doLaunch();
+    this.launching = this.doConnect();
     try {
       return await this.launching;
     } finally {
@@ -311,171 +148,51 @@ export class BrowserManager extends EventEmitter {
     }
   }
 
-  /**
-   * Launch the persistent context, recovering from a STALE Chromium profile
-   * lock. Chromium writes a `SingletonLock` symlink (`<host>-<pid>`) into the
-   * profile; if a prior run was killed uncleanly — e.g. the MCP host (Claude
-   * Desktop) SIGKILLed the server on quit/restart, leaving the browser orphaned
-   * — the lock survives and the next launch fails with "Opening in existing
-   * browser session". MCP clients respawn servers routinely, so this is common.
-   * We detect a dead lock owner, remove the singleton files, and retry once. If
-   * the owner is genuinely ALIVE, another instance holds the profile and we
-   * surface an actionable error instead of corrupting it.
-   */
-  private async launchWithLockRecovery(
-    contextOptions: PersistentContextOptions,
-  ): Promise<BrowserContext> {
-    try {
-      return await chromium.launchPersistentContext(this.profileDir, contextOptions);
-    } catch (err) {
-      const message = (err as Error).message ?? '';
-      const isLockError =
-        /already in use|existing browser session|ProcessSingleton|SingletonLock|profile.*in use/i.test(
-          message,
-        );
-      if (!isLockError) throw err;
-
-      const owner = inspectProfileLock(this.profileDir);
-      if (owner.alive && owner.pid !== null) {
-        if (isChromiumProcess(owner.pid)) {
-          // Orphaned browser from a previous run: the MCP host (e.g. Claude
-          // Desktop) SIGKILLed our server but the Chromium child survived and
-          // still holds OUR dedicated profile. Terminate it and reclaim.
-          try {
-            process.kill(owner.pid, 'SIGKILL');
-          } catch {
-            /* already gone between inspect and kill */
-          }
-          await new Promise((resolve) => setTimeout(resolve, 500));
-        } else {
-          // A live, non-Chromium process owns the lock (pid reuse). Don't kill
-          // an unrelated process — surface an actionable error instead.
-          throw new Error(
-            `the profile lock is held by pid ${owner.pid}, which is not our Chromium. ` +
-              `Set a different LINKEDIN_MCP_USERDATA, or clear the lock manually.`,
-          );
-        }
-      }
-
-      // Owner was dead (stale lock) or an orphan we just killed: clear the
-      // singleton files and retry once.
-      clearProfileLocks(this.profileDir);
-      process.stderr.write(
-        '[browser] recovered a held/stale Chromium profile lock; retrying launch.\n',
-      );
-      return await chromium.launchPersistentContext(this.profileDir, contextOptions);
-    }
-  }
-
-  private async doLaunch(): Promise<BrowserContext> {
-    if (this.mode === 'connect') {
-      return this.doConnect();
-    }
-
-    // Resolve the bundled Chromium location before Playwright reads it.
-    useBundledBrowsersIfPackaged();
-
-    // Reduce the automation fingerprint Chromium advertises.
-    const args = ['--disable-blink-features=AutomationControlled'];
-
-    // When running HEADED (the default for the embedded-mirror app), push the
-    // real Chromium window far off-screen so the user only ever sees it mirrored
-    // in the app pane — yet it stays a genuine headed browser, which third-party
-    // identity providers (e.g. Google sign-in) accept where they reject
-    // headless. The anti-throttle flags stop Chromium from pausing rendering of
-    // an off-screen/occluded window, which would otherwise freeze the screencast.
-    if (!this.headless) {
-      args.push(
-        '--window-position=-10000,-10000',
-        '--disable-backgrounding-occluded-windows',
-        '--disable-renderer-backgrounding',
-        '--disable-background-timer-throttling',
-        '--disable-features=CalculateNativeWinOcclusion',
-      );
-    }
-
-    const contextOptions: PersistentContextOptions = {
-      headless: this.headless,
-      slowMo: this.slowMo,
-      channel: 'chromium',
-      viewport: this.viewport,
-      locale: this.locale,
-      userAgent: PINNED_USER_AGENT,
-      ignoreHTTPSErrors: false,
-      args,
-    };
-
-    let context: BrowserContext;
-    try {
-      context = await this.launchWithLockRecovery(contextOptions);
-    } catch (err) {
-      throw new Error(
-        `Failed to launch persistent Chromium at ${this.profileDir}: ${(err as Error).message}`,
-      );
-    }
-
-    // Strip navigator.webdriver before any page script runs.
-    try {
-      await context.addInitScript(STEALTH_INIT_SCRIPT);
-    } catch (err) {
-      // Non-fatal: log to stderr (never stdout — MCP mode owns it) and continue.
-      process.stderr.write(
-        `[browser] addInitScript failed (non-fatal): ${(err as Error).message}\n`,
-      );
-    }
-
-    // Recovery layer: if a persisted storageState exists, re-inject its cookies
-    // on top of the persistent profile. The profile is authoritative, but this
-    // guards against a profile that lost cookies while the artifact still holds
-    // a valid session.
-    await this.restoreCookies(context);
-
-    this.context = context;
-
-    // Persistent contexts always come up with one initial page; adopt it as the
-    // primary, otherwise open one.
-    const existing = context.pages();
-    this.primaryPage = existing[0] ?? (await context.newPage());
-    this.wirePage(this.primaryPage);
-
-    // Track pages opened by LinkedIn (popups, etc.) so 'page-created' fires for them.
-    context.on('page', (page) => {
-      this.wirePage(page);
-      this.emit('page-created', page);
-    });
-
-    // If the underlying browser dies (crash / external close), reset our state.
-    context.on('close', () => {
-      if (this.context === context) {
-        this.context = null;
-        this.primaryPage = null;
-        this.emit('closed');
-      }
-    });
-
-    this.emit('launched', context);
-    return context;
-  }
-
-  // -- Connect mode (attach to Electron's in-app BrowserView over CDP) -------
+  // -- Connect (attach to the app's in-app BrowserView over CDP) -----------
 
   /**
-   * Attach over CDP to the Chromium that Electron already runs (the in-app
-   * `BrowserView`) instead of launching our own. The action modules then drive
-   * the SAME page the user sees natively — no screencast.
+   * Attach over CDP to the Chromium that the desktop app already runs (the
+   * in-app `BrowserView`). The action modules then drive the SAME page the user
+   * sees natively — no screencast.
    *
    * The connection is reused across `close()`/`launch()` cycles: Electron owns
    * the browser's lifecycle, so we attach once and re-point at its single page.
    * We NEVER call `cdpBrowser.close()` — that would tear down the user's app.
    */
   private async doConnect(): Promise<BrowserContext> {
+    // Resolve an endpoint lazily: an explicit one wins; otherwise ask the
+    // resolver (which may discover a running app or launch one). Done here, not
+    // in the constructor, so a server that starts before the app can still
+    // attach once the app is up, and app-launch happens only on first real use.
+    if (!this.cdpEndpoint && this.resolveEndpoint) {
+      this.cdpEndpoint = (await this.resolveEndpoint()) ?? undefined;
+    }
     if (!this.cdpEndpoint) {
-      throw new Error('BrowserManager: connect mode requires a cdpEndpoint');
+      throw new Error(
+        'No running LinkedIn app found to attach to. This driver attaches to the ' +
+          'desktop app over CDP and never launches its own browser — start the ' +
+          'LinkedIn app first (or set LINKEDIN_CDP_ENDPOINT to a reachable endpoint).',
+      );
     }
 
     // Reuse a still-live attachment; only (re)connect when we have none.
     if (!this.cdpBrowser || !this.cdpBrowser.isConnected()) {
-      this.cdpBrowser = await chromium.connectOverCDP(this.cdpEndpoint);
+      try {
+        this.cdpBrowser = await chromium.connectOverCDP(this.cdpEndpoint, { slowMo: this.slowMo });
+      } catch (err) {
+        this.cdpBrowser = null;
+        const failedEndpoint = this.cdpEndpoint;
+        // If this endpoint came from the resolver (not an explicit env value),
+        // drop it so the next attempt re-discovers / re-launches rather than
+        // retrying a dead port from a since-closed app.
+        if (this.resolveEndpoint && !process.env.LINKEDIN_CDP_ENDPOINT) {
+          this.cdpEndpoint = undefined;
+        }
+        throw new Error(
+          `Failed to attach to the LinkedIn app at ${failedEndpoint}: ${(err as Error).message}. ` +
+            `Is the app running?`,
+        );
+      }
       this.cdpBrowser.on('disconnected', () => {
         // Electron's Chromium went away (app quitting / view destroyed).
         this.cdpBrowser = null;
@@ -551,14 +268,11 @@ export class BrowserManager extends EventEmitter {
   }
 
   /**
-   * Close the context, persisting storageState first.
+   * Close: drop our references, persisting storageState first. We NEVER tear down
+   * Electron's Chromium — we keep the CDP attachment for reuse, so "stop"/"restart"
+   * from the UI re-points the driver without killing the window the user sees.
    *
-   * Idempotent: safe to call when already closed. We snapshot the session
-   * BEFORE closing so the portable artifact reflects the final cookie state.
-   *
-   * In CONNECT mode we never tear down Electron's Chromium — we only drop our
-   * references (and keep the CDP attachment for reuse), so "stop"/"restart" from
-   * the UI re-points the driver without killing the window the user is looking at.
+   * Idempotent: safe to call when already closed.
    */
   public async close(): Promise<void> {
     const context = this.context;
@@ -575,29 +289,18 @@ export class BrowserManager extends EventEmitter {
       );
     }
 
-    // Clearing references first prevents the 'close' handler from double-emitting.
+    // Clearing references first prevents the 'disconnected' handler from double-emitting.
     this.context = null;
     this.primaryPage = null;
 
-    if (this.mode === 'connect') {
-      // Leave Electron's browser + our CDP attachment alone; just signal closed.
-      this.emit('closed');
-      return;
-    }
-
-    try {
-      await context.close();
-    } catch (err) {
-      process.stderr.write(`[browser] error closing context: ${(err as Error).message}\n`);
-    }
-
+    // Leave Electron's browser + our CDP attachment alone; just signal closed.
     this.emit('closed');
   }
 
   // -- Accessors ----------------------------------------------------------
 
   /**
-   * Get the live context, launching lazily if necessary. Use this from action
+   * Get the live context, attaching lazily if necessary. Use this from action
    * code that must operate on a guaranteed-live context.
    */
   public async getContext(): Promise<BrowserContext> {
@@ -605,69 +308,31 @@ export class BrowserManager extends EventEmitter {
   }
 
   /**
-   * Get the primary page, launching the browser lazily if necessary. If the
-   * primary page was closed out from under us, a fresh one is created and
-   * promoted to primary.
+   * Get the primary page, attaching lazily if necessary. There is exactly ONE
+   * page — the in-app BrowserView. Never open a tab (it would be an invisible,
+   * un-mirrored page). If our handle went stale (view destroyed/recreated),
+   * re-locate the LinkedIn target.
    */
   public async getPage(): Promise<Page> {
     const context = await this.getContext();
 
-    // Connect mode: there is exactly ONE page — the in-app BrowserView. Never
-    // open a tab (it would be an invisible, un-mirrored page). If our handle
-    // went stale (view destroyed/recreated), re-locate the LinkedIn target.
-    if (this.mode === 'connect') {
-      if (!this.primaryPage || this.primaryPage.isClosed()) {
-        this.primaryPage = await this.findLinkedInPage(context);
-        this.wirePage(this.primaryPage);
-      }
-      return this.primaryPage;
-    }
-
     if (!this.primaryPage || this.primaryPage.isClosed()) {
-      this.primaryPage = context.pages()[0] ?? (await context.newPage());
+      this.primaryPage = await this.findLinkedInPage(context);
       this.wirePage(this.primaryPage);
     }
     return this.primaryPage;
   }
 
   /**
-   * Open an additional page in the pool (e.g. for a parallel-read scrape that
-   * still serializes through the action queue). Emits 'page-created'.
-   *
-   * Note: the 'page' context listener also fires 'page-created'; to avoid a
-   * double emit we create the page here and rely solely on that listener, so
-   * this method does not emit again itself.
-   *
-   * In CONNECT mode there is no page pool — the single in-app view IS the page,
-   * so this returns it rather than spawning an unmirrored tab.
+   * There is no page pool: the single in-app view IS the page, so this returns
+   * it rather than spawning an unmirrored tab. Kept for API compatibility with
+   * callers that expect a `newPage()`.
    */
   public async newPage(): Promise<Page> {
-    if (this.mode === 'connect') {
-      return this.getPage();
-    }
-    const context = await this.getContext();
-    const page = await context.newPage();
-    // `wirePage` + 'page-created' are handled by the context 'page' listener.
-    return page;
+    return this.getPage();
   }
 
   // -- Internals ----------------------------------------------------------
-
-  /** Re-inject persisted cookies into a freshly launched context, if any. */
-  private async restoreCookies(context: BrowserContext): Promise<void> {
-    try {
-      const cookies = await this.session.getCookies();
-      if (cookies.length > 0) {
-        await context.addCookies(cookies);
-      }
-    } catch (err) {
-      // The persistent profile remains the primary source of truth; restore is
-      // best-effort recovery only.
-      process.stderr.write(
-        `[browser] cookie restore skipped (non-fatal): ${(err as Error).message}\n`,
-      );
-    }
-  }
 
   /** Attach default timeouts / hardening to a page. Safe to call repeatedly. */
   private wirePage(page: Page): void {
