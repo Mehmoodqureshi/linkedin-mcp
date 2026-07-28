@@ -136,6 +136,38 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
   {
+    name: 'linkedin_update_profile',
+    description:
+      "Update the SIGNED-IN user's OWN profile. Edits only the fields you " +
+      'provide (all optional; supply at least one): firstName, lastName, ' +
+      'headline, location, about. Drives the "Edit intro" and "Edit about" ' +
+      'modals and returns a per-field outcome (updated / unchanged / failed). ' +
+      'This is a WRITE action, gated by LINKEDIN_ALLOW_MUTATIONS. Structured ' +
+      'sections (experience, education, skills) are not yet supported.',
+    inputSchema: {
+      firstName: z.string().min(1).max(100).describe('New first name.').optional(),
+      lastName: z.string().min(1).max(100).describe('New last name.').optional(),
+      headline: z
+        .string()
+        .max(220)
+        .describe('New headline (LinkedIn caps this at ~220 characters).')
+        .optional(),
+      location: z
+        .string()
+        .min(1)
+        .describe(
+          'New location. Resolved via the location typeahead — pass a ' +
+            'recognizable city/region (e.g. "San Francisco Bay Area").',
+        )
+        .optional(),
+      about: z
+        .string()
+        .max(2600)
+        .describe('New About / summary text (LinkedIn caps this at ~2600 characters).')
+        .optional(),
+    },
+  },
+  {
     name: 'linkedin_search_people',
     description:
       'Run a People search and return normalized result cards (name, ' +
@@ -408,6 +440,22 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     inputSchema: {},
   },
   {
+    name: 'linkedin_get_messages',
+    description:
+      'Read one message thread and return its messages in order (sender, text, ' +
+      'timestamp). Takes the conversation id from linkedin_get_conversations or ' +
+      'linkedin_send_message — a full /messaging/thread/ URL is also accepted. ' +
+      'Use it to read replies to a message that was sent.',
+    inputSchema: {
+      conversationId: z
+        .string()
+        .describe(
+          'Thread id as returned by linkedin_get_conversations, or the full ' +
+            'https://www.linkedin.com/messaging/thread/<id>/ URL.',
+        ),
+    },
+  },
+  {
     name: 'linkedin_get_quota',
     description:
       "Report today's usage of the daily safety caps on mutating actions " +
@@ -510,6 +558,17 @@ function optionalEnum<T extends string>(
  */
 function profileSlug(ref: string): string {
   const m = ref.match(/\/in\/([^/?#]+)/);
+  return (m?.[1] ?? ref).trim();
+}
+
+/**
+ * Normalize a conversation reference to its bare thread id. Accepts either the
+ * id itself or a full /messaging/thread/<id>/ URL, so a caller can pass back
+ * whichever form it copied out of a conversation listing. Falls back to the
+ * trimmed input when no thread segment is present.
+ */
+export function conversationThreadId(ref: string): string {
+  const m = ref.match(/\/messaging\/thread\/([^/?#]+)/);
   return (m?.[1] ?? ref).trim();
 }
 
@@ -648,6 +707,32 @@ export const TOOL_HANDLERS: Record<string, ToolHandler> = {
     return jsonResult(result);
   },
 
+  linkedin_update_profile: async (args) => {
+    const driver = await withAuthedDriver();
+    const firstName = optionalString(args, 'firstName');
+    const lastName = optionalString(args, 'lastName');
+    const headline = optionalString(args, 'headline');
+    const location = optionalString(args, 'location');
+    const about = optionalString(args, 'about');
+
+    const input = {
+      ...(firstName !== undefined ? { firstName } : {}),
+      ...(lastName !== undefined ? { lastName } : {}),
+      ...(headline !== undefined ? { headline } : {}),
+      ...(location !== undefined ? { location } : {}),
+      ...(about !== undefined ? { about } : {}),
+    };
+    if (Object.keys(input).length === 0) {
+      throw new McpToolError(
+        'Provide at least one profile field to update: firstName, lastName, ' +
+          'headline, location, or about.',
+      );
+    }
+
+    const result = await driver.profileEdit.updateProfile(input);
+    return jsonResult(result);
+  },
+
   // --- Search -------------------------------------------------------------
   linkedin_search_people: async (args) => {
     const driver = await withAuthedDriver();
@@ -685,6 +770,16 @@ export const TOOL_HANDLERS: Record<string, ToolHandler> = {
   linkedin_get_conversations: async () => {
     const driver = await withAuthedDriver();
     const result = await driver.messages.getConversations();
+    return jsonResult(result);
+  },
+
+  linkedin_get_messages: async (args) => {
+    const driver = await withAuthedDriver();
+    const conversationId = conversationThreadId(requireString(args, 'conversationId'));
+    if (!conversationId) {
+      throw new McpToolError('Argument "conversationId" must name a thread.');
+    }
+    const result = await driver.messages.getMessages(conversationId);
     return jsonResult(result);
   },
 

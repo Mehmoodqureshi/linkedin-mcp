@@ -18,6 +18,14 @@ export type {
   RecommendationEntry,
 } from './profile';
 
+export { ProfileEditActions, MAX_HEADLINE_LENGTH, MAX_ABOUT_LENGTH } from './profile-edit';
+export type {
+  ProfileUpdateInput,
+  ProfileUpdateResult,
+  ProfileFieldUpdate,
+  ProfileEditField,
+} from './profile-edit';
+
 export { SearchActions } from './search';
 export type {
   SearchResult,

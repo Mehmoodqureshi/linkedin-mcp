@@ -2,9 +2,10 @@
  * src/mcp/mutation-gate.ts — deny-by-default gate for account-modifying tools.
  *
  * LinkedIn write actions (message, connect, comment, react, accept/withdraw
- * invitation) can act on the user's real account, so a malicious or hijacked MCP
- * prompt must NOT be able to trigger them freely. These actions are disabled
- * unless the operator opts in via the `LINKEDIN_ALLOW_MUTATIONS` allowlist.
+ * invitation, update own profile) can act on the user's real account, so a
+ * malicious or hijacked MCP prompt must NOT be able to trigger them freely.
+ * These actions are disabled unless the operator opts in via the
+ * `LINKEDIN_ALLOW_MUTATIONS` allowlist.
  *
  * Kept dependency-free (no driver/Electron imports) so it is trivially unit-testable.
  */
@@ -17,6 +18,7 @@ export const MUTATING_TOOLS: ReadonlySet<string> = new Set<string>([
   'linkedin_withdraw_invitation',
   'linkedin_react',
   'linkedin_comment',
+  'linkedin_update_profile',
 ]);
 
 export function isMutatingTool(name: string): boolean {
