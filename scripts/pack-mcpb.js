@@ -47,9 +47,14 @@ function copyInto(stage, relPath, { optional = false } = {}) {
 }
 
 function main() {
-  // 1. Compile.
+  // 1. Generate icons + compile. gen-icon writes assets/ (gitignored, generated),
+  //    which the manifest's icon reference and the staging copy both need — on a
+  //    fresh checkout (CI) they don't exist until this runs.
+  const npmShell = process.platform === 'win32';
+  log('generating icons…');
+  run('npm', ['run', 'gen-icon'], { cwd: ROOT, shell: npmShell });
   log('building dist/…');
-  run('npm', ['run', 'build'], { cwd: ROOT, shell: process.platform === 'win32' });
+  run('npm', ['run', 'build'], { cwd: ROOT, shell: npmShell });
 
   // 2. Stage.
   const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'linkedin-mcpb-'));
