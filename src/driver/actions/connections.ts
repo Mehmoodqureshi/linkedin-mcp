@@ -7,7 +7,7 @@
  * (LinkedIn's hard limit) and truncated defensively.
  */
 
-import type { Locator, Page } from 'playwright';
+import type { Locator, Page } from 'playwright-core';
 
 import {
   LINKEDIN_BASE,

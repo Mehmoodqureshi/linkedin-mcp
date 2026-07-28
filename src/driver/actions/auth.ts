@@ -15,7 +15,7 @@
  */
 
 import { promises as fs } from 'node:fs';
-import type { BrowserContext, Cookie, Page } from 'playwright';
+import type { BrowserContext, Cookie, Page } from 'playwright-core';
 
 import {
   LINKEDIN_BASE,

@@ -20,7 +20,7 @@
  * value is reported `unchanged` and never re-saved.
  */
 
-import type { Locator, Page } from 'playwright';
+import type { Locator, Page } from 'playwright-core';
 
 import {
   LINKEDIN_BASE,

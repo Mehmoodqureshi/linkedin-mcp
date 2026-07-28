@@ -30,7 +30,7 @@
 
 import { EventEmitter } from 'node:events';
 
-import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
+import { chromium, type Browser, type BrowserContext, type Page } from 'playwright-core';
 
 /** Small async sleep used while polling for the in-app page target. */
 function delay(ms: number): Promise<void> {

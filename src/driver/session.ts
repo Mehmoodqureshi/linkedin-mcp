@@ -23,7 +23,7 @@
 import { promises as fs } from 'node:fs';
 import { dirname, join } from 'node:path';
 
-import type { BrowserContext } from 'playwright';
+import type { BrowserContext } from 'playwright-core';
 
 // ---------------------------------------------------------------------------
 // Path resolution

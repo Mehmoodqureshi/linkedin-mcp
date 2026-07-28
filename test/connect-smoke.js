@@ -19,7 +19,7 @@ app.commandLine.appendSwitch('remote-debugging-port', String(PORT));
 app.commandLine.appendSwitch('remote-allow-origins', '*');
 app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled');
 
-const { chromium } = require('playwright');
+const { chromium } = require('playwright-core');
 
 const checks = [];
 const log = (...a) => process.stdout.write('[smoke] ' + a.join(' ') + '\n');

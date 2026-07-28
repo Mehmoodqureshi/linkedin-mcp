@@ -24,11 +24,6 @@
       "from": "resources",
       "to": "resources",
       "filter": ["**/*"]
-    },
-    {
-      "from": "node_modules/playwright-core/.local-browsers",
-      "to": "playwright-browsers",
-      "filter": ["**/*"]
     }
   ],
   "asar": true,

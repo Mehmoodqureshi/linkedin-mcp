@@ -4,7 +4,7 @@
  *
  * Two consumers run this:
  *   1. End users installing via `npx @mehmoodqureshi/linkedin-mcp` (or `npm i -g`).
- *      They have `playwright` (a dependency) but NOT `electron-builder`
+ *      They have `playwright-core` (a dependency) but NOT `electron-builder`
  *      (a devDependency).
  *   2. Developers cloning the repo and running `npm install`. They additionally
  *      have `electron-builder` and may build the desktop app.

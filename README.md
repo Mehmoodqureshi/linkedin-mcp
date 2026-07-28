@@ -200,7 +200,7 @@ Each tool returns a JSON payload inside the standard MCP text-content envelope. 
 
 Two cooperating layers keep you logged in across restarts:
 
-1. **Persistent Chromium profile (primary).** The browser runs against an on-disk profile directory (`<userData>/playwright-profile`). Cookies, localStorage, and IndexedDB live there and survive app restarts on their own — exactly like a normal browser that "remembers" you.
+1. **Persistent Electron session (primary).** LinkedIn renders in the app's Electron `BrowserView` under a persistent session partition. Cookies, localStorage, and IndexedDB live on disk and survive app restarts on their own — exactly like a normal browser that "remembers" you. (The connect-only MCP server attaches to this browser; it has no profile of its own.)
 
 2. **Portable `storageState` snapshot (secondary).** On login (and on graceful close) the app also writes `<userData>/linkedin-session.json`. This gives:
    - a fast, **browser-free** "am I logged in?" check by inspecting the LinkedIn `li_at` cookie and its expiry (no Chromium launch required), and
@@ -223,7 +223,9 @@ Copy `.env.example` to `.env`. All values are optional:
 - `LINKEDIN_EMAIL` / `LINKEDIN_PASSWORD` – optional pre-fill for auto-login. **Not recommended**; manual headed login is preferred and required for 2FA/captcha accounts.
 - `MCP_LOG_LEVEL` – `error|warn|info|debug|trace`.
 - `LINKEDIN_MCP_STDIO` – set to `1` when launched by Claude Desktop as a stdio MCP server (the config injects this).
-- `PLAYWRIGHT_BROWSERS_PATH` – override the Playwright browsers location (packaged builds point this at the bundled Chromium).
+- `LINKEDIN_CDP_ENDPOINT` – CDP endpoint of the app to attach to (default: auto-discovered from a running app).
+- `LINKEDIN_AUTOLAUNCH_APP` – set to `0` to stop the server from launching the desktop app when none is running (default: it launches it).
+- `LINKEDIN_APP_CMD` – exact command used to launch the desktop app (e.g. `npx electron .` in a dev checkout); overrides the platform default.
 
 ---
 

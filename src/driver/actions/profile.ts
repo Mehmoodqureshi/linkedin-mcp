@@ -16,7 +16,7 @@
  * live text/structure rather than fight obfuscated selectors.
  */
 
-import type { Page } from 'playwright';
+import type { Page } from 'playwright-core';
 
 import {
   LINKEDIN_BASE,

@@ -29,7 +29,7 @@ import { MessagingActions } from './actions/messages';
 import { ConnectionActions } from './actions/connections';
 import { FeedActions } from './actions/feed';
 
-import type { Page } from 'playwright';
+import type { Page } from 'playwright-core';
 import type { DriverState, DriverStatus } from './types';
 
 // ---------------------------------------------------------------------------

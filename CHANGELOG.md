@@ -1,3 +1,7 @@
+## 0.5.1 - 2026-07-28
+
+- chore: depend on playwright-core instead of playwright — the driver only uses connectOverCDP, so no browser binary is ever needed. Fully removes the Chromium download from install (smaller, faster, airtight "no download").
+
 ## 0.5.0 - 2026-07-28
 
 - refactor: connect-only driver — the MCP server attaches to the desktop app's browser over CDP and never launches its own Chromium; launch/headless mode removed. No more Playwright Chromium download.

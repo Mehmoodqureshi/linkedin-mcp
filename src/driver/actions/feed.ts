@@ -8,7 +8,7 @@
  * carry a type, an actor, a timestamp, and a read/unread state.
  */
 
-import type { Page } from 'playwright';
+import type { Page } from 'playwright-core';
 
 import {
   LINKEDIN_BASE,

@@ -10,7 +10,7 @@
  * message bubbles are exposed with stable `data-*`/aria hooks.
  */
 
-import type { Locator, Page } from 'playwright';
+import type { Locator, Page } from 'playwright-core';
 
 import {
   LINKEDIN_BASE,

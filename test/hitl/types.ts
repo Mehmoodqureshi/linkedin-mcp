@@ -7,7 +7,7 @@
  * single, stable surface.
  */
 
-import type { Page } from 'playwright';
+import type { Page } from 'playwright-core';
 import type { LinkedInDriver } from '../../src/driver/linkedin';
 import type { ReactionType } from '../../src/driver/actions/feed';
 

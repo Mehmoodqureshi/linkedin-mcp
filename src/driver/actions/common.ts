@@ -17,7 +17,7 @@
  *     radar. Reads inside a single page are not delayed.
  */
 
-import type { Page } from 'playwright';
+import type { Page } from 'playwright-core';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -229,7 +229,7 @@ export async function firstVisible(
   page: Page,
   selectors: readonly string[],
   timeoutMs = 4000,
-): Promise<import('playwright').Locator | null> {
+): Promise<import('playwright-core').Locator | null> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     for (const sel of selectors) {
