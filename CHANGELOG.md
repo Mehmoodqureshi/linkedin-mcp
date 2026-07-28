@@ -1,3 +1,9 @@
+## 0.6.0 - 2026-07-28
+
+- BREAKING: dropped the Electron desktop app. The MCP server is now standalone and drives your INSTALLED Google Chrome directly (Playwright `channel: 'chrome'`) — no separate app to install/sign/notarize, and no browser download.
+- On the first LinkedIn action a visible Chrome window opens for a one-time login; the session persists under `~/.linkedin-mcp`.
+- Removed src/main, src/preload, src/renderer, electron-builder config, and the app build/release scripts; the repo is now a pure MCP server. Requires Google Chrome installed.
+
 ## 0.5.2 - 2026-07-28
 
 - fix: Windows app auto-launch — probe the NSIS install location (%LOCALAPPDATA%\Programs\LinkedIn MCP\LinkedIn MCP.exe) and the Start Menu shortcut instead of a bare app name that never resolved.

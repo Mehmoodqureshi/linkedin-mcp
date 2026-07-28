@@ -1,18 +1,18 @@
 /**
  * SessionManager — persistence + validation of the LinkedIn Playwright session.
  *
- * The desktop app's persistent Electron `BrowserView` session partition is the
- * primary session mechanism: cookies, localStorage and IndexedDB all live on
- * disk and survive app restarts on their own. The connect-only driver attaches
- * to that browser rather than owning a profile of its own.
+ * The persistent Chromium profile (owned by BrowserManager) is the primary
+ * session mechanism: cookies, localStorage and IndexedDB all live on disk in
+ * the profile directory and survive app restarts on their own.
  *
- * This module adds a SECOND layer: a portable, inspectable `storageState`
- * artifact written to `app.getPath('userData')/linkedin-session.json`. It gives
- * us:
+ * This module adds a SECOND layer on top of that profile: a portable,
+ * inspectable `storageState` artifact written to
+ * `app.getPath('userData')/linkedin-session.json`. It gives us:
  *
  *   (a) a fast, browser-free way to answer "are we logged in?" by inspecting
- *       the `li_at` cookie + its expiry, without attaching to Chromium;
- *   (b) a portable snapshot of the session cookies for inspection / migration;
+ *       the `li_at` cookie + its expiry, without launching Chromium;
+ *   (b) a recovery path: if the persistent profile is corrupted we can launch a
+ *       fresh context and re-inject cookies via `context.addCookies(...)`;
  *   (c) a stable, human-inspectable session file for debugging.
  *
  * Everything here is defensive: a missing / malformed file is treated as "no
@@ -35,22 +35,11 @@ import type { BrowserContext } from 'playwright-core';
  * registration script) where `electron` may not have an `app` available yet.
  */
 function resolveUserDataDir(): string {
-  try {
-    // Avoid a static import so non-Electron contexts don't blow up at load time.
-    // eslint-disable-next-line @typescript-eslint/no-var-requires, global-require
-    const electron = require('electron') as typeof import('electron');
-    const app = electron.app;
-    if (app && typeof app.getPath === 'function') {
-      return app.getPath('userData');
-    }
-  } catch {
-    // Not running inside Electron — fall through to an env/temp fallback.
-  }
-
-  const fallback =
+  return (
     process.env.LINKEDIN_MCP_USERDATA ??
-    join(process.env.HOME ?? process.env.USERPROFILE ?? process.cwd(), '.linkedin-mcp');
-  return fallback;
+    process.env.LINKEDIN_USER_DATA_DIR ??
+    join(process.env.HOME ?? process.env.USERPROFILE ?? process.cwd(), '.linkedin-mcp')
+  );
 }
 
 /** Absolute path to the persisted storageState artifact. */

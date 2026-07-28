@@ -53,19 +53,11 @@ interface QuotaState {
   counts: Partial<Record<QuotaAction, number>>;
 }
 
-/** Resolve userData (lazy/defensive, matching SessionManager). */
+/** Resolve userData (matching SessionManager). */
 function resolveUserDataDir(): string {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires, global-require
-    const electron = require('electron') as typeof import('electron');
-    if (electron.app && typeof electron.app.getPath === 'function') {
-      return electron.app.getPath('userData');
-    }
-  } catch {
-    /* not in Electron */
-  }
   return (
     process.env.LINKEDIN_MCP_USERDATA ??
+    process.env.LINKEDIN_USER_DATA_DIR ??
     join(process.env.HOME ?? process.env.USERPROFILE ?? process.cwd(), '.linkedin-mcp')
   );
 }

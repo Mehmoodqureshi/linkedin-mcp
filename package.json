@@ -1,7 +1,7 @@
 {
   "name": "@mehmoodqureshi/linkedin-mcp",
-  "version": "0.5.2",
-  "description": "Drive LinkedIn via Playwright and expose it as an MCP server over stdio. Runs standalone (npx) or as an Electron tray app.",
+  "version": "0.6.0",
+  "description": "LinkedIn automation as an MCP server over stdio. Drives your installed Chrome — no separate app, no browser download.",
   "author": "Mehmood Ur Rehman Qureshi",
   "license": "MIT",
   "homepage": "https://github.com/Mehmoodqureshi/linkedin-mcp#readme",
@@ -12,15 +12,13 @@
   "bugs": {
     "url": "https://github.com/Mehmoodqureshi/linkedin-mcp/issues"
   },
-  "main": "dist/main/index.js",
+  "main": "dist/cli.js",
   "bin": {
     "linkedin-mcp": "dist/cli.js"
   },
   "files": [
     "dist/**/*.js",
     "dist/**/*.d.ts",
-    "scripts/postinstall.js",
-    "resources",
     "README.md"
   ],
   "publishConfig": {
@@ -35,55 +33,29 @@
     "claude"
   ],
   "scripts": {
-    "start": "electron .",
     "mcp": "node dist/cli.js",
-    "build": "tsc -p tsconfig.json && npm run build:renderer",
-    "build:renderer": "tsc -p tsconfig.renderer.json && npm run copy:renderer && npm run build:react",
-    "copy:renderer": "node -e \"const fs=require('fs');fs.mkdirSync('dist/renderer',{recursive:true});fs.copyFileSync('src/renderer/index.html','dist/renderer/index.html')\"",
-    "build:react": "esbuild src/renderer/react/main.tsx --bundle --minify --jsx=automatic --format=iife --target=chrome120 --outfile=dist/renderer/connect.js && npm run copy:connect",
-    "copy:connect": "node -e \"const fs=require('fs');fs.mkdirSync('dist/renderer',{recursive:true});fs.copyFileSync('src/renderer/react/connect.html','dist/renderer/connect.html')\"",
-    "typecheck:react": "tsc -p tsconfig.react.json",
+    "build": "tsc -p tsconfig.json",
     "build:watch": "tsc -p tsconfig.json --watch",
-    "dev": "ts-node --project tsconfig.json src/main/index.ts",
-    "start:connect": "LINKEDIN_CONNECT_UI=1 electron .",
     "clean": "rimraf dist",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "typecheck:test": "tsc -p tsconfig.test.json",
-    "register-mcp": "ts-node --project tsconfig.json scripts/register-mcp.ts",
-    "test:smoke": "electron test/connect-smoke.js",
     "test:hitl": "ts-node --project tsconfig.json test/hitl/index.ts",
     "test:hitl:all": "ts-node --project tsconfig.json test/hitl/index.ts --include-mutating",
-    "gen-icon": "node scripts/gen-icon.js",
-    "pack": "npm run gen-icon && npm run build && electron-builder --dir",
-    "dist": "npm run gen-icon && npm run build && electron-builder",
-    "dist:mac": "npm run gen-icon && npm run build && electron-builder --mac",
-    "dist:win": "npm run gen-icon && npm run build && electron-builder --win",
-    "dist:linux": "npm run gen-icon && npm run build && electron-builder --linux",
-    "prepublishOnly": "npm run clean && npm run build",
-    "postinstall": "node scripts/postinstall.js",
     "test:unit": "ts-node --project tsconfig.json test/mutation-gate.test.ts && ts-node --project tsconfig.json test/quota.test.ts && ts-node --project tsconfig.json test/tools-catalog.test.ts",
-    "pack:mcpb": "node scripts/pack-mcpb.js"
+    "gen-icon": "node scripts/gen-icon.js",
+    "pack:mcpb": "node scripts/pack-mcpb.js",
+    "prepublishOnly": "npm run clean && npm run build"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "playwright-core": "^1.49.1",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^20.19.43",
-    "@types/react": "^18.3.31",
-    "@types/react-dom": "^18.3.7",
-    "electron": "^43.1.0",
-    "electron-builder": "^26.15.3",
-    "esbuild": "^0.28.1",
     "rimraf": "^5.0.10",
     "ts-node": "^10.9.2",
     "typescript": "^5.7.2"
-  },
-  "build": {
-    "extends": "./electron-builder.json"
   },
   "engines": {
     "node": ">=18.0.0"

@@ -4,100 +4,62 @@
 [![npm](https://img.shields.io/npm/v/%40mehmoodqureshi%2Flinkedin-mcp?label=npm)](https://www.npmjs.com/package/@mehmoodqureshi/linkedin-mcp)
 [![license](https://img.shields.io/npm/l/%40mehmoodqureshi%2Flinkedin-mcp?label=license)](LICENSE)
 
-A local Electron desktop app that drives **LinkedIn** in a real, visible browser window and exposes that automation to **Claude Desktop** (or any MCP client) as an **MCP server over stdio**.
+A **standalone MCP server** that drives **LinkedIn** through your **installed Google Chrome** and exposes that automation to **Claude** (Desktop, Code, or any MCP client) over stdio.
 
-Instead of using LinkedIn's (restricted) official API, the app logs in as you in a real browser window, keeps the session alive on disk, and lets an AI assistant call a small set of well-defined tools (view a profile, search people/jobs/companies, send a message, send a connection request, read the feed and notifications, update your own profile, etc.). You stay in control: login is manual and headed, so you complete any 2FA/captcha yourself, and your password is never stored.
+Instead of using LinkedIn's (restricted) official API, it logs in as you in a real Chrome window, keeps the session alive on disk, and lets an AI assistant call a small set of well-defined tools (view a profile, search people/jobs/companies, send a message, send a connection request, read the feed and notifications, update your own profile, etc.). You stay in control: login is manual and headed, so you complete any 2FA/captcha yourself, and your password is never stored.
 
-The MCP server is **connect-only**: it attaches to the desktop app's browser over CDP and never launches a browser of its own. That means **no Playwright Chromium download** — the app renders LinkedIn in Electron's own bundled browser, and the server just drives it.
+**No separate app to install, no code-signing, no browser download.** The server uses Playwright's `channel: 'chrome'` to drive the Chrome you already have. On the first LinkedIn action a Chrome window opens for a one-time login; the session persists under `~/.linkedin-mcp`.
+
+> **Requires Google Chrome installed.**
 
 ---
 
 ## What it does
 
-- **Headed, persistent browser session.** Renders LinkedIn in the app's own visible Electron browser with an on-disk session, plus a portable `storageState` snapshot for fast validation and recovery. The MCP server attaches to it over CDP (`connectOverCDP`) — it never launches a browser of its own.
-- **Control panel UI.** An Electron window shows driver/session status, a sign-in panel, an MCP-client indicator, and a live activity log. The app also lives in the system tray and keeps running in the background as an MCP server.
-- **MCP server over stdio.** Exposes LinkedIn actions as MCP tools so Claude Desktop can call them. All diagnostics go to stderr so the JSON-RPC stream on stdout stays clean.
+- **Headed, persistent browser session.** Drives your installed Chrome with an on-disk profile, plus a portable `storageState` snapshot for fast validation and recovery. Login happens once in a visible window.
+- **MCP server over stdio.** Exposes LinkedIn actions as MCP tools so any MCP client can call them. All diagnostics go to stderr so the JSON-RPC stream on stdout stays clean.
 - **Rate-limit-aware automation.** Every state-changing action is paced (>= ~2s with jitter) and selectors prefer ARIA/`data-*`/semantic anchors over LinkedIn's randomized CSS classes.
+- **Write actions off by default.** Message/connect/comment/react/update-profile are gated behind an explicit `LINKEDIN_ALLOW_MUTATIONS` allowlist.
 
 ---
 
-## Quick start — one-click (Claude Desktop)
+## Quick start
 
-The lowest-friction path is the **Desktop Extension bundle** (`.mcpb`):
-
-1. Download `linkedin-mcp.mcpb` (from Releases) and **double-click it** — Claude Desktop registers the server with no config editing and no restart.
-2. On first use, the desktop app **launches itself** and opens LinkedIn; **log in once** (2FA/captcha included). That session persists.
-
-That's it — no `npx`, no JSON, no Chromium download. Write actions stay **disabled** until you fill in the extension's "Enable write actions" field (see [Write actions are off by default](#write-actions-are-off-by-default)).
-
-Build the bundle yourself from a checkout:
-
-```bash
-npm run pack:mcpb      # builds dist/ and packs linkedin-mcp.mcpb
-```
-
-## Quick start — npx / other MCP clients
-
-No clone required:
-
-```bash
-npx -y @mehmoodqureshi/linkedin-mcp
-```
-
-The server is **connect-only**, so there's no browser download. It attaches to the LinkedIn desktop app; if the app isn't running, the server **launches it for you** on first use, then drives that visible window. Add the server to your client config (see [Connecting to an MCP client](#connecting-to-an-mcp-client)) — for Claude Code that's a single command:
+**Claude Code (or any terminal MCP client):**
 
 ```bash
 claude mcp add linkedin -- npx -y @mehmoodqureshi/linkedin-mcp
 ```
+
+**Claude Desktop (one-click):** download `linkedin-mcp.mcpb` from Releases and **double-click it** — Claude registers the server, no config editing. Set "Enable write actions" in its config if you want writes.
+
+**Any other MCP client (Cursor, Windsurf, Cline, VS Code, …):** add the stdio block:
+
+```json
+{ "mcpServers": { "linkedin": { "command": "npx", "args": ["-y", "@mehmoodqureshi/linkedin-mcp"] } } }
+```
+
+On the first LinkedIn action a **Chrome window opens** — log in once (2FA/captcha included) and it drives that session from then on. Write actions stay **disabled** until you opt in (see [Write actions are off by default](#write-actions-are-off-by-default)).
 
 ```bash
 npx -y @mehmoodqureshi/linkedin-mcp --help      # usage + config snippet
 npx -y @mehmoodqureshi/linkedin-mcp --version
 ```
 
-The same package also ships the Electron desktop app (tray + activity log) — see [How to run](#how-to-run) to build it from source.
-
 ---
 
 ## Prerequisites
 
-- **Node.js 20+** (the project targets ES2022 / modern Electron).
-- **npm** (ships with Node).
+- **Google Chrome** installed (the server drives it — no separate browser download).
+- **Node.js 20+** and **npm** (only needed for the `npx` path; the `.mcpb` bundles its own runtime).
 
-No separate browser download is needed — the app uses Electron's bundled Chromium and the connect-only server attaches to it. Install dependencies with:
+From a source checkout:
 
 ```bash
 npm install
-```
-
----
-
-## How to run
-
-> Just want the MCP server? Use the [npx quick start](#quick-start-npx). This section covers the optional Electron desktop app, built from a source checkout.
-
-```bash
-npm start
-```
-
-This launches the Electron control panel (UI mode). From there you can:
-
-1. **Start Driver** – launches the persistent Chromium.
-2. **Sign In** – opens LinkedIn's login page in the controlled browser. Enter your credentials and complete any 2FA/captcha **manually** in that window. Once you reach the feed, the session is persisted.
-3. Watch the **Session** panel flip to *authenticated* and the **Activity Log** for progress.
-
-To rebuild the compiled output (main + renderer) without packaging:
-
-```bash
-npm run build       # tsc for main/driver/mcp + renderer + copy index.html
-npm run typecheck   # type-check only, no emit
-```
-
-Packaging (requires the missing `assets/` and `build/` files, see Known issues):
-
-```bash
-npm run pack        # unpacked build
-npm run dist        # platform installer(s)
+npm run build       # tsc -> dist/
+npm run typecheck   # type-check only
+npm run pack:mcpb   # build the .mcpb bundle (needs `zip`)
 ```
 
 ---
@@ -124,9 +86,9 @@ MCP clients discover servers from a JSON config — for Claude Desktop:
 }
 ```
 
-This server is **connect-only**: it drives the LinkedIn **desktop app's** browser over CDP and never launches its own. Start the app first — the server auto-discovers and attaches to it; with no app running, actions return an actionable "start the app" error.
+The server drives your **installed Google Chrome** (`channel: 'chrome'`) — no separate app, no browser download. On the first LinkedIn action a Chrome window opens for a one-time login; the session persists under `~/.linkedin-mcp`.
 
-Optional `env` overrides: `LINKEDIN_MCP_USERDATA` (data dir, default `~/.linkedin-mcp`) and `LINKEDIN_CDP_ENDPOINT` (CDP endpoint of the app to attach to — defaults to the running app, auto-discovered).
+Optional `env` overrides: `LINKEDIN_MCP_USERDATA` (data dir, default `~/.linkedin-mcp`) and `LINKEDIN_HEADLESS=1` (run Chrome headless — keep it headed for the first login).
 
 ### Windows
 
@@ -145,28 +107,8 @@ WSL2 is **not** required — native Windows works. One config change is, though:
 
 Or: `claude mcp add linkedin -- cmd /c npx -y @mehmoodqureshi/linkedin-mcp`
 
-The desktop app installs to `%LOCALAPPDATA%\Programs\LinkedIn MCP\` (NSIS, per-user). The server auto-launches it from there on first use; if you installed it to a custom directory, point the server at it with `LINKEDIN_APP_CMD` (e.g. `LINKEDIN_APP_CMD="C:\\path\\to\\LinkedIn MCP.exe"`).
-
-### Alternative — Electron desktop app (from a source checkout)
-
-Runs the same MCP server embedded in the tray app, so you get a control-panel window alongside it:
-
-```json
-{
-  "mcpServers": {
-    "linkedin": {
-      "command": "./node_modules/.bin/electron",
-      "args": ["."],
-      "cwd": "/absolute/path/to/linkedin-mcp",
-      "env": { "LINKEDIN_MCP_STDIO": "1" }
-    }
-  }
-}
-```
-
 Notes:
 - **Restart the client** after editing the config.
-- Both paths share the same persistent session on disk, so logging in once via either is enough.
 - The MCP server keeps stdout reserved for JSON-RPC; all diagnostics go to stderr.
 
 ---
@@ -202,17 +144,17 @@ Each tool returns a JSON payload inside the standard MCP text-content envelope. 
 
 Two cooperating layers keep you logged in across restarts:
 
-1. **Persistent Electron session (primary).** LinkedIn renders in the app's Electron `BrowserView` under a persistent session partition. Cookies, localStorage, and IndexedDB live on disk and survive app restarts on their own — exactly like a normal browser that "remembers" you. (The connect-only MCP server attaches to this browser; it has no profile of its own.)
+1. **Persistent Chrome profile (primary).** The driver launches your Chrome with a dedicated on-disk profile at `<userData>/playwright-profile`. Cookies, localStorage, and IndexedDB live there and survive restarts on their own — exactly like a normal browser that "remembers" you.
 
-2. **Portable `storageState` snapshot (secondary).** On login (and on graceful close) the app also writes `<userData>/linkedin-session.json`. This gives:
-   - a fast, **browser-free** "am I logged in?" check by inspecting the LinkedIn `li_at` cookie and its expiry (no Chromium launch required), and
+2. **Portable `storageState` snapshot (secondary).** On login (and on graceful close) it also writes `<userData>/linkedin-session.json`. This gives:
+   - a fast, **browser-free** "am I logged in?" check by inspecting the LinkedIn `li_at` cookie and its expiry (no browser launch required), and
    - a **recovery path**: if the profile is corrupted, a fresh context can be re-hydrated by re-injecting the snapshot's cookies via `context.addCookies(...)`.
 
-`<userData>` is Electron's per-app data directory (e.g. `~/Library/Application Support/LinkedIn MCP/` on macOS). Outside Electron it falls back to `$LINKEDIN_MCP_USERDATA` or `~/.linkedin-mcp`.
+`<userData>` is `$LINKEDIN_MCP_USERDATA` (or `$LINKEDIN_USER_DATA_DIR`), defaulting to `~/.linkedin-mcp`.
 
-**Validity** is determined by the presence of a non-expired `li_at` cookie. A session cookie (`expires === -1`) is treated as valid. `linkedin_status` / the UI surface this as `sessionValid`, while `isLoggedIn` additionally confirms against the live page when a context is up.
+**Validity** is determined by the presence of a non-expired `li_at` cookie. A session cookie (`expires === -1`) is treated as valid. `linkedin_status` surfaces this as `sessionValid`, while `isLoggedIn` additionally confirms against the live page when a context is up.
 
-**Logging out** (`linkedin_logout` / the Logout button) clears the profile cookies and deletes the snapshot, forcing a fresh manual login next time.
+**Logging out** (`linkedin_logout`) clears the profile cookies and deletes the snapshot, forcing a fresh manual login next time.
 
 The session files contain live credentials-equivalent cookies — `.gitignore` already excludes `userData/`, `pw-profile/`, and any `storageState.json`. **Never commit a logged-in session.**
 
@@ -223,11 +165,9 @@ The session files contain live credentials-equivalent cookies — `.gitignore` a
 Copy `.env.example` to `.env`. All values are optional:
 
 - `LINKEDIN_EMAIL` / `LINKEDIN_PASSWORD` – optional pre-fill for auto-login. **Not recommended**; manual headed login is preferred and required for 2FA/captcha accounts.
-- `MCP_LOG_LEVEL` – `error|warn|info|debug|trace`.
-- `LINKEDIN_MCP_STDIO` – set to `1` when launched by Claude Desktop as a stdio MCP server (the config injects this).
-- `LINKEDIN_CDP_ENDPOINT` – CDP endpoint of the app to attach to (default: auto-discovered from a running app).
-- `LINKEDIN_AUTOLAUNCH_APP` – set to `0` to stop the server from launching the desktop app when none is running (default: it launches it).
-- `LINKEDIN_APP_CMD` – exact command used to launch the desktop app (e.g. `npx electron .` in a dev checkout); overrides the platform default.
+- `LINKEDIN_MCP_USERDATA` / `LINKEDIN_USER_DATA_DIR` – override the data + Chrome-profile directory (default `~/.linkedin-mcp`).
+- `LINKEDIN_HEADLESS` – set to `1` to run Chrome headless (keep it headed for the first login).
+- `LINKEDIN_ALLOW_MUTATIONS` – comma-separated allowlist of write actions, or `all` (default: all writes disabled).
 
 ---
 
@@ -235,24 +175,18 @@ Copy `.env.example` to `.env`. All values are optional:
 
 ```
 src/
-  main/        Electron main process: lifecycle, window, tray, IPC, bootstrapping
-    index.ts
-    ipc-handlers.ts
-  preload/     Context-isolated bridge exposed as window.linkedinMCP
-    index.ts
-  driver/      Playwright automation layer
-    browser.ts     BrowserManager (persistent context, singleton)
+  cli.ts       Standalone stdio MCP entry point (the npx bin)
+  driver/      Playwright automation layer (drives your Chrome)
+    browser.ts     BrowserManager (persistent context, singleton, channel: 'chrome')
     session.ts     SessionManager (storageState persist/validate/recover)
     linkedin.ts    LinkedInDriver facade (composes the action modules)
+    quota.ts       Daily action-cap tracking
     types.ts       Shared normalized result types
-    actions/       auth, profile, search, messages, connections, feed (+ common, index)
+    actions/       auth, profile, profile-edit, search, messages, connections, feed (+ common, index)
   mcp/         MCP server + tool catalog/dispatch
     server.ts
     tools.ts
-    claude-desktop-config.ts
-  renderer/    Control-panel UI (sandboxed, no Node)
-    index.html
-    app.ts
+    mutation-gate.ts
 ```
 
 ---

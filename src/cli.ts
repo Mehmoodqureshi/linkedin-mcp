@@ -1,23 +1,13 @@
 #!/usr/bin/env node
 /**
- * Standalone CLI entry point — the `npx`-distributable path.
- *
- * Runs the LinkedIn MCP server over stdio WITHOUT Electron. The desktop app
- * (`src/main/index.ts`) embeds the same MCP server inside an Electron tray app;
- * this entry instead boots it as a plain Node process so it can be launched
- * directly by any MCP client:
+ * CLI entry point — the `npx`-distributable MCP server.
  *
  *     npx @mehmoodqureshi/linkedin-mcp
  *
- * The driver, MCP server, and tool layer are all Electron-free (they lazily
- * `require('electron')` only to locate Electron's userData dir, and fall back to
- * `$LINKEDIN_MCP_USERDATA` or `~/.linkedin-mcp` when it is absent), so nothing
- * here pulls Electron in.
- *
- * The driver is CONNECT-ONLY: it never launches its own Chromium. It attaches
- * over CDP to the running LinkedIn desktop app (auto-discovered, or via
- * `$LINKEDIN_CDP_ENDPOINT`). With no app running, tool calls fail with an
- * actionable "start the app" error.
+ * This is a pure Node MCP server: it drives your INSTALLED Google Chrome via
+ * Playwright (`channel: 'chrome'`) — no bundled/desktop app, and no browser
+ * download. On the first LinkedIn action a Chrome window opens so you can log in
+ * once; the session persists under `~/.linkedin-mcp`.
  *
  * CRITICAL: in stdio mode, stdout carries the JSON-RPC stream. Never write
  * human-readable text to stdout — all diagnostics go to stderr. Help/version
@@ -61,18 +51,16 @@ function printHelp(): void {
       `      }\n` +
       `    }\n` +
       `  }\n\n` +
-      `This server is connect-only: it drives the LinkedIn DESKTOP APP's browser\n` +
-      `over CDP and never launches its own. Start the LinkedIn app first; this\n` +
-      `server auto-discovers and attaches to it. Without a running app, actions\n` +
-      `fail with a "start the app" message.\n\n` +
+      `Requires Google Chrome installed (it drives your Chrome; no download).\n\n` +
       `Environment:\n` +
       `  LINKEDIN_MCP_USERDATA   Override the data dir (default: ~/.linkedin-mcp)\n` +
-      `  LINKEDIN_CDP_ENDPOINT   CDP endpoint of the app to attach to (default:\n` +
-      `                          auto-discovered from a running app)\n` +
+      `  LINKEDIN_HEADLESS=1     Run Chrome headless (default: headed, so you can\n` +
+      `                          complete the one-time manual login)\n` +
+      `  LINKEDIN_USER_DATA_DIR  Alias for the persistent Chrome profile dir\n` +
       `  LINKEDIN_ALLOW_MUTATIONS  Comma-separated allowlist of write actions to enable\n` +
       `                          (e.g. send_message,react) or "all". Write actions\n` +
-      `                          (message/connect/comment/react/invitations) are\n` +
-      `                          DISABLED by default.\n`,
+      `                          (message/connect/comment/react/invitations/update_profile)\n` +
+      `                          are DISABLED by default.\n`,
   );
 }
 

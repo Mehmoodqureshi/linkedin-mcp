@@ -19,7 +19,6 @@
  */
 
 import { BrowserManager } from './browser';
-import { resolveCdpEndpoint } from './ensure-app';
 import { SessionManager, getSessionManager } from './session';
 import { AuthActions } from './actions/auth';
 import { ProfileActions } from './actions/profile';
@@ -39,36 +38,51 @@ import type { DriverState, DriverStatus } from './types';
 /** Resolved configuration sourced from `process.env`. */
 interface DriverConfig {
   /**
-   * CDP endpoint to attach to. The driver is connect-only: it attaches over CDP
-   * to the desktop app's in-app BrowserView and never launches its own Chromium.
-   * Resolved from `LINKEDIN_CDP_ENDPOINT` (set in-process by the Electron app),
-   * else auto-discovered from a running app's advert. `undefined` when no app is
-   * running — every action then fails with an actionable "start the app" error.
+   * How the browser is obtained. 'connect' (set by the Electron UI) attaches
+   * over CDP to the in-app BrowserView; 'launch' (MCP / npx / default) spawns a
+   * dedicated Playwright Chromium.
    */
+  browserMode: 'launch' | 'connect';
+  /** CDP endpoint to attach to in connect mode (e.g. http://127.0.0.1:47872). */
   cdpEndpoint: string | undefined;
+  /** Run Chromium headless. Defaults to false (real LinkedIn flags headless). */
+  headless: boolean;
   /** Per-operation Playwright delay (ms). 0 for snappy interactive mirroring. */
   slowMo: number;
   /** LinkedIn account email, if provided via env for auto-login. */
   email: string | undefined;
   /** LinkedIn account password, if provided via env for auto-login. */
   password: string | undefined;
+  /** Absolute path to the persistent Chromium profile directory. */
+  userDataDir: string | undefined;
+  /** Drive the user's REAL Chrome profile of this name (e.g. "Default") instead of a dedicated one. */
+  chromeProfile: string | undefined;
+  /** Chrome user-data-dir holding `chromeProfile` (defaults to the OS Chrome dir). */
+  chromeUserDataDir: string | undefined;
 }
 
 function readConfig(): DriverConfig {
+  const truthy = (v: string | undefined): boolean =>
+    v === '1' || v?.toLowerCase() === 'true';
+
   const rawSlowMo = Number(process.env.LINKEDIN_SLOWMO);
   const slowMo = Number.isFinite(rawSlowMo) && rawSlowMo >= 0 ? rawSlowMo : 50;
 
-  // Connect-only: attach to the app's Chromium. An explicit endpoint (injected by
-  // the Electron app for its own in-process driver) wins. When absent, resolution
-  // is deferred to attach time via `resolveCdpEndpoint` (discover a running app,
-  // or launch one) — see the BrowserManager wiring below.
-  const cdpEndpoint = process.env.LINKEDIN_CDP_ENDPOINT ?? undefined;
+  const cdpEndpoint = process.env.LINKEDIN_CDP_ENDPOINT;
+  // Connect mode only when explicitly requested AND we have somewhere to attach.
+  const browserMode =
+    process.env.LINKEDIN_BROWSER_MODE === 'connect' && cdpEndpoint ? 'connect' : 'launch';
 
   return {
+    browserMode,
     cdpEndpoint,
+    headless: truthy(process.env.LINKEDIN_HEADLESS),
     slowMo,
     email: process.env.LINKEDIN_EMAIL,
     password: process.env.LINKEDIN_PASSWORD,
+    userDataDir: process.env.LINKEDIN_USER_DATA_DIR,
+    chromeProfile: process.env.LINKEDIN_CHROME_PROFILE,
+    chromeUserDataDir: process.env.LINKEDIN_CHROME_USER_DATA_DIR,
   };
 }
 
@@ -111,14 +125,21 @@ export class LinkedInDriver {
   constructor() {
     this.config = readConfig();
     this.browser = new BrowserManager({
-      // Explicit endpoint (the app's own in-process driver) wins. Otherwise defer
-      // to a lazy resolver that discovers a running app — and launches one if
-      // needed — at first attach, so a standalone server never has to be told
-      // "start the app first".
+      mode: this.config.browserMode,
       ...(this.config.cdpEndpoint !== undefined
         ? { cdpEndpoint: this.config.cdpEndpoint }
-        : { resolveEndpoint: () => resolveCdpEndpoint() }),
+        : {}),
+      headless: this.config.headless,
       slowMo: this.config.slowMo,
+      ...(this.config.userDataDir !== undefined
+        ? { userDataDir: this.config.userDataDir }
+        : {}),
+      ...(this.config.chromeProfile !== undefined
+        ? { chromeProfile: this.config.chromeProfile }
+        : {}),
+      ...(this.config.chromeUserDataDir !== undefined
+        ? { chromeUserDataDir: this.config.chromeUserDataDir }
+        : {}),
     });
     // Shared process-wide session manager (single-session model).
     this.session = getSessionManager();
