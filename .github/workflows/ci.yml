@@ -21,7 +21,8 @@ jobs:
             node-version: 22
     name: ${{ matrix.os }} / Node ${{ matrix.node-version }}
     env:
-      # The driver's Chromium isn't needed for typecheck/build/unit tests.
+      # The driver attaches to the user's installed Chrome, and typecheck/build/
+      # unit tests never open a browser at all — so skip the Playwright download.
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
     steps:
       - uses: actions/checkout@v4
@@ -37,9 +38,6 @@ jobs:
       - name: Typecheck (main)
         run: npm run typecheck
 
-      - name: Typecheck (renderer)
-        run: npm run typecheck:react
-
       - name: Typecheck (tests)
         run: npm run typecheck:test
 
@@ -47,5 +45,6 @@ jobs:
         run: npm run build
 
       - name: Test (unit)
-        # Unit tests only; the connect/tool smoke tests need Electron + a display.
+        # Unit tests only; the HITL smoke tests drive a real Chrome and a real
+        # LinkedIn session, so they can only run on a developer's machine.
         run: npm run test:unit

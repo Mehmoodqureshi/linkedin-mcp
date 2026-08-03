@@ -8,6 +8,7 @@
  * Node + the system `zip` (posix) / `tar` (Windows bsdtar) — no extra tooling.
  *
  * Steps:
+ *   0. Sync manifest.json's `version` from package.json — see syncManifestVersion.
  *   1. `npm run build` — compile dist/.
  *   2. Stage into a temp dir: manifest.json, dist/, assets/, resources/,
  *      package.json + package-lock.json.
@@ -46,7 +47,41 @@ function copyInto(stage, relPath, { optional = false } = {}) {
   fs.cpSync(src, path.join(stage, relPath), { recursive: true });
 }
 
+/**
+ * Copy package.json's version into manifest.json.
+ *
+ * `npm version` bumps package.json and package-lock.json, and knows nothing about
+ * the .mcpb manifest — so the two drifted silently (the manifest still claimed
+ * 0.6.0 while the package shipped 0.7.0, which is the version Claude Desktop
+ * shows for an installed extension). package.json is the single source of truth;
+ * this rewrites the manifest in place so the checked-in file never lies, and the
+ * staged copy is correct by construction.
+ *
+ * Rewrites only the one field, preserving key order and the file's 2-space
+ * formatting, so the diff after a bump is a single line.
+ */
+function syncManifestVersion() {
+  const pkgPath = path.join(ROOT, 'package.json');
+  const manifestPath = path.join(ROOT, 'manifest.json');
+  const { version } = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+  const raw = fs.readFileSync(manifestPath, 'utf8');
+  const current = JSON.parse(raw).version;
+  if (current === version) {
+    log(`manifest version already ${version}`);
+    return;
+  }
+  const updated = raw.replace(/("version"\s*:\s*)"[^"]*"/, `$1${JSON.stringify(version)}`);
+  if (JSON.parse(updated).version !== version) {
+    throw new Error(`could not rewrite manifest.json version (${current} -> ${version})`);
+  }
+  fs.writeFileSync(manifestPath, updated);
+  log(`manifest version ${current} -> ${version}`);
+}
+
 function main() {
+  // 0. Keep the manifest's version honest before anything is staged.
+  syncManifestVersion();
+
   // 1. Generate icons + compile. gen-icon writes assets/ (gitignored, generated),
   //    which the manifest's icon reference and the staging copy both need — on a
   //    fresh checkout (CI) they don't exist until this runs.

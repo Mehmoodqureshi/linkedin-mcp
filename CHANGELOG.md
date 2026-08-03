@@ -1,3 +1,24 @@
+## Unreleased
+
+- ci: fix the CI workflow, which had failed on every push since 0.6.0. It still
+  ran `npm run typecheck:react`, a script removed along with the Electron renderer,
+  so every run died with `Missing script: "typecheck:react"` before reaching the
+  build or the tests.
+- ci: drop `publish.yml`. Publishing from CI was abandoned back in 0.4.x — the
+  granular npm token cannot bypass 2FA, so every run failed with `EOTP` — and the
+  workflow fires on exactly the commits that matter (a version bump), turning each
+  release red for no reason. Publishing is local, via `daily-publish`. Restoring a
+  CI route would mean OIDC Trusted Publishing, which is not set up.
+- fix: `npm run pack:mcpb` now copies package.json's version into manifest.json
+  before packing. `npm version` knows nothing about the .mcpb manifest, so the two
+  drifted: the manifest claimed 0.6.0 while the package shipped 0.7.0 — and that
+  manifest version is what Claude Desktop shows for an installed extension.
+- fix: type errors in the test suite (a zod raw shape's broad index signature) that
+  made `npm run typecheck:test` fail; the step is back in CI now that it passes.
+
+Note: no npm release — manifest.json and the workflows are not part of the
+published tarball, so 0.7.0 on npm is unaffected.
+
 ## 0.7.0 - 2026-08-03
 
 - feat: every mutating tool (`linkedin_send_message`, `send_connection`, `react`,

@@ -6,6 +6,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import type { ZodTypeAny } from 'zod';
 
 import {
   TOOL_DEFINITIONS,
@@ -22,11 +23,15 @@ test('every advertised tool has a handler, and vice versa', () => {
 test('linkedin_get_messages is advertised with a required conversationId', () => {
   const def = TOOL_DEFINITIONS.find((d) => d.name === 'linkedin_get_messages');
   assert.ok(def, 'linkedin_get_messages should be in the catalog');
-  const shape = def.inputSchema;
+  // `inputSchema` is a zod RAW SHAPE, whose index signature is the broad
+  // `$ZodType` — narrow to `ZodTypeAny` to reach `safeParse`.
+  const shape = def.inputSchema as Record<string, ZodTypeAny | undefined>;
   assert.deepEqual(Object.keys(shape), ['conversationId']);
+  const conversationId = shape.conversationId;
+  assert.ok(conversationId, 'conversationId should be advertised');
   // Required, so an absent value must fail the SDK-side validation.
-  assert.equal(shape.conversationId.safeParse('2-abc==').success, true);
-  assert.equal(shape.conversationId.safeParse(undefined).success, false);
+  assert.equal(conversationId.safeParse('2-abc==').success, true);
+  assert.equal(conversationId.safeParse(undefined).success, false);
   assert.equal(typeof TOOL_HANDLERS.linkedin_get_messages, 'function');
 });
 
