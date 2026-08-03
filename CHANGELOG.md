@@ -13,6 +13,13 @@
   before packing. `npm version` knows nothing about the .mcpb manifest, so the two
   drifted: the manifest claimed 0.6.0 while the package shipped 0.7.0 — and that
   manifest version is what Claude Desktop shows for an installed extension.
+- fix: `pack:mcpb` also regenerates manifest.json's `tools` from the server's own
+  `TOOL_DEFINITIONS`. The hand-maintained list advertised 12 tools while the server
+  exposed 21, so nine — the entire invitations surface, the messaging reads, and
+  the quota tool — were invisible in the extension's listing. Each entry is the
+  tool's own description trimmed to its first sentence, with " Write action."
+  appended for anything the mutation gate covers, so adding a tool now updates the
+  manifest for free.
 - fix: type errors in the test suite (a zod raw shape's broad index signature) that
   made `npm run typecheck:test` fail; the step is back in CI now that it passes.
 

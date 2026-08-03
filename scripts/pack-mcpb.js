@@ -10,6 +10,8 @@
  * Steps:
  *   0. Sync manifest.json's `version` from package.json — see syncManifestVersion.
  *   1. `npm run build` — compile dist/.
+ *   1b. Sync manifest.json's `tools` from the server's own catalog — see
+ *       syncManifestTools (needs dist/, so it runs after the build).
  *   2. Stage into a temp dir: manifest.json, dist/, assets/, resources/,
  *      package.json + package-lock.json.
  *   3. `npm ci --omit=dev` in the stage so ONLY runtime deps land in the bundle
@@ -78,6 +80,84 @@ function syncManifestVersion() {
   log(`manifest version ${current} -> ${version}`);
 }
 
+// --- manifest tools -------------------------------------------------------
+
+/** Cap on a generated tool blurb; the manifest is a summary, not the full catalog. */
+const MAX_TOOL_DESCRIPTION = 200;
+
+/**
+ * Abbreviations whose trailing dot is not a sentence end. Checked against the
+ * text UP TO and including the candidate dot, so only a trailing match counts.
+ */
+const ABBREVIATION = /(?:^|\s)(?:e\.g|i\.e|etc|vs|approx|no|fig|dr|mr|ms|st|inc|ltd)\.$/i;
+
+/**
+ * The first sentence of `text`.
+ *
+ * A dot ends a sentence only when it is followed by whitespace (or the end) AND
+ * the next word starts like a new sentence AND the run-up is not a known
+ * abbreviation — so "…(e.g. to react)…" and "0.7" do not split.
+ */
+function firstSentence(text) {
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] !== '.') continue;
+    const next = text[i + 1];
+    if (next !== undefined && !/\s/.test(next)) continue;
+    const head = text.slice(0, i + 1);
+    if (ABBREVIATION.test(head)) continue;
+    const rest = text.slice(i + 1).trimStart();
+    if (rest && !/^["'“(A-Z]/.test(rest)) continue;
+    return head;
+  }
+  return text;
+}
+
+/** One short blurb for the manifest, derived from a tool's own MCP description. */
+function summarize(description) {
+  const sentence = firstSentence(description.replace(/\s+/g, ' ').trim());
+  if (sentence.length <= MAX_TOOL_DESCRIPTION) return sentence;
+  const cut = sentence.slice(0, MAX_TOOL_DESCRIPTION);
+  const lastSpace = cut.lastIndexOf(' ');
+  return `${(lastSpace > 40 ? cut.slice(0, lastSpace) : cut).replace(/[,;:]$/, '')}…`;
+}
+
+/**
+ * Regenerate manifest.json's `tools` from the server's own `TOOL_DEFINITIONS`.
+ *
+ * The list was hand-maintained and had drifted badly — it advertised 12 tools
+ * while the server exposed 21, so nine tools (including the whole invitations and
+ * messaging-read surface) were invisible in the extension's Claude Desktop
+ * listing. Deriving it from the catalog means adding a tool updates the manifest
+ * for free, and the catalog is already the thing `registerTools` validates
+ * against at startup.
+ *
+ * Each entry keeps the manifest's established shape: a one-sentence blurb, with
+ * " Write action." appended for anything the mutation gate covers.
+ */
+function syncManifestTools() {
+  // Required lazily and from dist/, so this must run after the build. Importing
+  // the catalog launches nothing — handlers resolve the driver only when called.
+  const { TOOL_DEFINITIONS } = require(path.join(ROOT, 'dist', 'mcp', 'tools.js'));
+  const { isMutatingTool } = require(path.join(ROOT, 'dist', 'mcp', 'mutation-gate.js'));
+
+  const tools = TOOL_DEFINITIONS.map((d) => ({
+    name: d.name,
+    description: isMutatingTool(d.name) ? `${summarize(d.description)} Write action.` : summarize(d.description),
+  }));
+
+  const manifestPath = path.join(ROOT, 'manifest.json');
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  const before = JSON.stringify(manifest.tools);
+  if (before === JSON.stringify(tools)) {
+    log(`manifest tools already in sync (${tools.length})`);
+    return;
+  }
+  const previousCount = Array.isArray(manifest.tools) ? manifest.tools.length : 0;
+  manifest.tools = tools;
+  fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  log(`manifest tools ${previousCount} -> ${tools.length}`);
+}
+
 function main() {
   // 0. Keep the manifest's version honest before anything is staged.
   syncManifestVersion();
@@ -90,6 +170,9 @@ function main() {
   run('npm', ['run', 'gen-icon'], { cwd: ROOT, shell: npmShell });
   log('building dist/…');
   run('npm', ['run', 'build'], { cwd: ROOT, shell: npmShell });
+
+  // 1b. dist/ exists now, so the catalog can be read and mirrored into the manifest.
+  syncManifestTools();
 
   // 2. Stage.
   const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'linkedin-mcpb-'));
@@ -126,4 +209,8 @@ function main() {
   log('Install it by double-clicking the file in Claude Desktop.');
 }
 
-main();
+// Only pack when run directly (`npm run pack:mcpb`); requiring this file just
+// exposes the helpers, so the manifest-sync logic can be exercised on its own.
+if (require.main === module) main();
+
+module.exports = { firstSentence, summarize, syncManifestVersion, syncManifestTools };

@@ -39,52 +39,88 @@
   },
   "tools": [
     {
+      "name": "linkedin_login",
+      "description": "Start the manual login flow."
+    },
+    {
+      "name": "linkedin_logout",
+      "description": "Clear the stored LinkedIn session: deletes the saved storageState and clears the persistent browser profile cookies so the next action requires a fresh manual login."
+    },
+    {
       "name": "linkedin_status",
-      "description": "Report driver + login status."
+      "description": "Return the current driver/session status: lifecycle state, whether a LinkedIn session is authenticated, and whether the persisted session cookies are still valid."
     },
     {
       "name": "linkedin_get_profile",
-      "description": "Open and scrape a member profile."
+      "description": "Open and scrape a LinkedIn member profile."
     },
     {
       "name": "linkedin_update_profile",
-      "description": "Update your own profile (headline, about, name, location). Write action."
+      "description": "Update the SIGNED-IN user's OWN profile. Write action."
     },
     {
       "name": "linkedin_search_people",
-      "description": "Search people with filters."
+      "description": "Run a People search and return normalized result cards (name, headline, location, profile URL, connection degree)."
     },
     {
       "name": "linkedin_search_jobs",
-      "description": "Search job postings."
+      "description": "Run a Jobs search and return normalized job postings (title, company, location, posted date, workplace type, salary if shown, job URL)."
     },
     {
       "name": "linkedin_search_companies",
-      "description": "Search companies."
-    },
-    {
-      "name": "linkedin_get_feed",
-      "description": "Read home-feed posts."
-    },
-    {
-      "name": "linkedin_get_notifications",
-      "description": "Read notifications."
+      "description": "Run a Company search and return normalized company cards (name, industry, size, company URL)."
     },
     {
       "name": "linkedin_send_message",
-      "description": "Send a direct message. Write action."
+      "description": "Send a direct message to an existing 1st-degree connection (or an open-profile / InMail-eligible member). Write action."
     },
     {
       "name": "linkedin_send_connection",
-      "description": "Send a connection request. Write action."
+      "description": "Send a connection request to a member, optionally with a personalized note. Write action."
     },
     {
-      "name": "linkedin_comment",
-      "description": "Comment on a post. Write action."
+      "name": "linkedin_get_invitations",
+      "description": "List pending RECEIVED connection invitations from the invitation manager."
+    },
+    {
+      "name": "linkedin_accept_invitation",
+      "description": "Accept a pending RECEIVED connection invitation, identified by the inviter’s profileId (vanity slug, as returned by linkedin_get_invitations) or their full profile URL. Write action."
+    },
+    {
+      "name": "linkedin_withdraw_invitation",
+      "description": "Withdraw a pending SENT connection invitation, identified by the recipient’s profileId (vanity slug) or their full profile URL. Write action."
     },
     {
       "name": "linkedin_react",
-      "description": "React to a post. Write action."
+      "description": "React to a post by its permalink URL with one of LinkedIn’s six reactions (like, celebrate, support, love, insightful, funny). Write action."
+    },
+    {
+      "name": "linkedin_comment",
+      "description": "Post a comment on a post by its permalink URL. Write action."
+    },
+    {
+      "name": "linkedin_get_member_posts",
+      "description": "List a member’s recent posts (newest first) with their canonical permalink URLs and a short text preview, by reading their recent-activity page."
+    },
+    {
+      "name": "linkedin_get_feed",
+      "description": "Read the home feed and return normalized posts (author, author URL, text, posted time, like/comment counts, post URL)."
+    },
+    {
+      "name": "linkedin_get_notifications",
+      "description": "Read the notifications panel and return normalized notification items (type, actor, text, timestamp, target URL, read/unread state)."
+    },
+    {
+      "name": "linkedin_get_conversations",
+      "description": "List the message threads in the LinkedIn inbox as normalized conversation summaries (participant, snippet, conversation id, timestamp, unread state)."
+    },
+    {
+      "name": "linkedin_get_messages",
+      "description": "Read one message thread and return its messages in order (sender, text, timestamp)."
+    },
+    {
+      "name": "linkedin_get_quota",
+      "description": "Report today's usage of the daily safety caps on mutating actions (connection, message, reaction, comment)."
     }
   ],
   "keywords": [
