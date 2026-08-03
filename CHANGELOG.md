@@ -1,3 +1,30 @@
+## 0.7.0 - 2026-08-03
+
+- feat: every mutating tool (`linkedin_send_message`, `send_connection`, `react`,
+  `comment`, `accept_invitation`, `withdraw_invitation`) takes `dryRun`. It resolves
+  the target, returns the exact payload that WOULD be sent, and performs nothing —
+  no action, no quota charged. `LINKEDIN_ALLOW_MUTATIONS` is all-or-nothing per
+  session, so once writes were enabled an agent had no way to check what it was
+  about to put in a real person's inbox: the confirmation step the HITL harness has
+  always given a human reviewer. A dry run is exempt from the mutation gate, since
+  previewing matters most while writes are still off; every `dryRun` branch returns
+  before its write call. `react`, `comment` and `withdraw_invitation` answer without
+  launching Chrome at all.
+- feat: the driver's typed error code now rides in the MCP error envelope, with a
+  one-clause recovery hint. `needs_login`, `needs_verification`, `quota_exceeded`,
+  `action_failed` and `mutations_disabled` were all flattened to an English
+  sentence, so an agent had to string-match prose to tell "solve the captcha and
+  retry" from "wait until midnight" from "the selector broke". Only known codes are
+  echoed, so an unrelated library exposing a `.code` cannot inject one.
+- feat: `linkedin_search_people`, `search_jobs`, `search_companies` and
+  `get_conversations` take an optional `limit` (max 100). `get_feed`,
+  `get_notifications` and `get_member_posts` already had one; these were hardcoded
+  at 25-30, so asking for 5 results still cost 25 and 40 was unreachable. Defaults
+  are unchanged.
+- fix: the MCP handshake reports the real package version. It was hardcoded
+  `1.0.0` while the package shipped 0.6.0, so every client — and every bug report
+  written from what a client displayed — named a version that has never existed.
+
 ## 0.6.0 - 2026-07-28
 
 - BREAKING: dropped the Electron desktop app. The MCP server is now standalone and drives your INSTALLED Google Chrome directly (Playwright `channel: 'chrome'`) — no separate app to install/sign/notarize, and no browser download.
