@@ -38,6 +38,7 @@ import { type CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 import { getInstance, type LinkedInDriver } from '../driver/linkedin';
 import type { ReactionType } from '../driver/actions';
+import { DEFAULT_RESULT_LIMIT, MAX_RESULT_LIMIT } from '../driver/actions/search';
 import { getQuotaManager, nextResetAt } from '../driver/quota';
 import { isMutatingTool, mutationAllowed } from './mutation-gate';
 
@@ -51,9 +52,12 @@ import { isMutatingTool, mutationAllowed } from './mutation-gate';
  * catches it and renders a structured MCP error result.
  */
 export class McpToolError extends Error {
-  constructor(message: string) {
+  /** Optional stable code, echoed into the error envelope alongside the message. */
+  readonly code?: string | undefined;
+  constructor(message: string, code?: string) {
     super(message);
     this.name = 'McpToolError';
+    this.code = code;
   }
 }
 
@@ -189,6 +193,13 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         })
         .describe('Optional People-search filters.')
         .optional(),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(MAX_RESULT_LIMIT)
+        .describe('Maximum results to return (default 25). Fewer results means a shorter scroll and a smaller payload.')
+        .optional(),
     },
   },
   {
@@ -245,6 +256,13 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         })
         .describe('Optional Jobs-search filters.')
         .optional(),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(MAX_RESULT_LIMIT)
+        .describe('Maximum results to return (default 25). Fewer results means a shorter scroll and a smaller payload.')
+        .optional(),
     },
   },
   {
@@ -275,6 +293,13 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         })
         .describe('Optional Company-search filters.')
         .optional(),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(MAX_RESULT_LIMIT)
+        .describe('Maximum results to return (default 25). Fewer results means a shorter scroll and a smaller payload.')
+        .optional(),
     },
   },
   {
@@ -286,6 +311,10 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     inputSchema: {
       profileUrl: z.string().describe('Recipient profile URL or /in/ slug.'),
       message: z.string().min(1).max(8000).describe('Message body text.'),
+      dryRun: z
+        .boolean()
+        .describe('Resolve the target and return exactly what WOULD be sent, without performing the action or counting it against the daily quota. Use this to preview a write before it reaches a real person.')
+        .optional(),
     },
   },
   {
@@ -303,6 +332,10 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
           'Optional personalized note (LinkedIn caps this around 300 ' +
             'characters).',
         )
+        .optional(),
+      dryRun: z
+        .boolean()
+        .describe('Resolve the target and return exactly what WOULD be sent, without performing the action or counting it against the daily quota. Use this to preview a write before it reaches a real person.')
         .optional(),
     },
   },
@@ -327,6 +360,10 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         .describe(
           'Inviter vanity slug (e.g. "john-doe") or full /in/ profile URL.',
         ),
+      dryRun: z
+        .boolean()
+        .describe('Resolve the target and return exactly what WOULD be sent, without performing the action or counting it against the daily quota. Use this to preview a write before it reaches a real person.')
+        .optional(),
     },
   },
   {
@@ -341,6 +378,10 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         .describe(
           'Recipient vanity slug (e.g. "john-doe") or full /in/ profile URL.',
         ),
+      dryRun: z
+        .boolean()
+        .describe('Resolve the target and return exactly what WOULD be sent, without performing the action or counting it against the daily quota. Use this to preview a write before it reaches a real person.')
+        .optional(),
     },
   },
   {
@@ -363,6 +404,10 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         .enum(['like', 'celebrate', 'support', 'love', 'insightful', 'funny'])
         .describe('Which reaction to apply. Defaults to "like".')
         .optional(),
+      dryRun: z
+        .boolean()
+        .describe('Resolve the target and return exactly what WOULD be sent, without performing the action or counting it against the daily quota. Use this to preview a write before it reaches a real person.')
+        .optional(),
     },
   },
   {
@@ -380,6 +425,10 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
             '(as returned in a feed post’s postUrl).',
         ),
       text: z.string().min(1).max(1250).describe('Comment body text.'),
+      dryRun: z
+        .boolean()
+        .describe('Resolve the target and return exactly what WOULD be sent, without performing the action or counting it against the daily quota. Use this to preview a write before it reaches a real person.')
+        .optional(),
     },
   },
   {
@@ -437,7 +486,15 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       'List the message threads in the LinkedIn inbox as normalized ' +
       'conversation summaries (participant, snippet, conversation id, ' +
       'timestamp, unread state).',
-    inputSchema: {},
+    inputSchema: {
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(MAX_RESULT_LIMIT)
+        .describe('Maximum threads to return (default 30).')
+        .optional(),
+    },
   },
   {
     name: 'linkedin_get_messages',
@@ -655,6 +712,31 @@ function jsonResult(value: unknown): ToolResult {
   };
 }
 
+/** Whether the caller asked to preview a write rather than perform it. */
+function isDryRun(args: Args): boolean {
+  return args.dryRun === true;
+}
+
+/**
+ * Render a preview of a write that was NOT performed.
+ *
+ * `LINKEDIN_ALLOW_MUTATIONS` is all-or-nothing for a session: once writes are
+ * enabled, an agent had no way to check what it was about to put in a real
+ * person's inbox — the confirmation step the HITL harness has always given a
+ * human reviewer. A dry run resolves the target and returns the exact payload,
+ * performs no action, and records nothing against the daily quota.
+ */
+function dryRunResult(tool: string, payload: Record<string, unknown>): ToolResult {
+  return jsonResult({
+    dryRun: true,
+    tool,
+    performed: false,
+    quotaCharged: false,
+    wouldSend: payload,
+    note: 'Nothing was sent. Re-run the same call without dryRun to perform this action.',
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
@@ -738,7 +820,8 @@ export const TOOL_HANDLERS: Record<string, ToolHandler> = {
     const driver = await withAuthedDriver();
     const query = requireString(args, 'query');
     const filters = optionalObject(args, 'filters');
-    const result = await driver.search.searchPeople(query, filters as never);
+    const limit = optionalInt(args, 'limit', 1, MAX_RESULT_LIMIT) ?? DEFAULT_RESULT_LIMIT;
+    const result = await driver.search.searchPeople(query, filters as never, limit);
     return jsonResult(result);
   },
 
@@ -746,7 +829,8 @@ export const TOOL_HANDLERS: Record<string, ToolHandler> = {
     const driver = await withAuthedDriver();
     const query = requireString(args, 'query');
     const filters = optionalObject(args, 'filters');
-    const result = await driver.search.searchJobs(query, filters as never);
+    const limit = optionalInt(args, 'limit', 1, MAX_RESULT_LIMIT) ?? DEFAULT_RESULT_LIMIT;
+    const result = await driver.search.searchJobs(query, filters as never, limit);
     return jsonResult(result);
   },
 
@@ -754,7 +838,8 @@ export const TOOL_HANDLERS: Record<string, ToolHandler> = {
     const driver = await withAuthedDriver();
     const query = requireString(args, 'query');
     const filters = optionalObject(args, 'filters');
-    const result = await driver.search.searchCompanies(query, filters as never);
+    const limit = optionalInt(args, 'limit', 1, MAX_RESULT_LIMIT) ?? DEFAULT_RESULT_LIMIT;
+    const result = await driver.search.searchCompanies(query, filters as never, limit);
     return jsonResult(result);
   },
 
@@ -763,13 +848,20 @@ export const TOOL_HANDLERS: Record<string, ToolHandler> = {
     const driver = await withAuthedDriver();
     const profileUrl = requireString(args, 'profileUrl');
     const message = requireString(args, 'message');
+    if (isDryRun(args)) {
+      return dryRunResult('linkedin_send_message', {
+        recipient: await driver.profile.getProfile(profileUrl),
+        message,
+      });
+    }
     const result = await driver.messages.sendMessage(profileUrl, message);
     return jsonResult(result);
   },
 
-  linkedin_get_conversations: async () => {
+  linkedin_get_conversations: async (args) => {
     const driver = await withAuthedDriver();
-    const result = await driver.messages.getConversations();
+    const limit = optionalInt(args, 'limit', 1, MAX_RESULT_LIMIT) ?? 30;
+    const result = await driver.messages.getConversations(limit);
     return jsonResult(result);
   },
 
@@ -807,6 +899,12 @@ export const TOOL_HANDLERS: Record<string, ToolHandler> = {
     const driver = await withAuthedDriver();
     const profileUrl = requireString(args, 'profileUrl');
     const note = optionalString(args, 'note');
+    if (isDryRun(args)) {
+      return dryRunResult('linkedin_send_connection', {
+        recipient: await driver.profile.getProfile(profileUrl),
+        note: note ?? null,
+      });
+    }
     const result = await driver.connections.sendConnectionRequest(profileUrl, note);
     return jsonResult(result);
   },
@@ -820,30 +918,49 @@ export const TOOL_HANDLERS: Record<string, ToolHandler> = {
   linkedin_accept_invitation: async (args) => {
     const driver = await withAuthedDriver();
     const profileId = profileSlug(requireString(args, 'profileId'));
+    if (isDryRun(args)) {
+      const pending = await driver.connections.getConnectionRequests();
+      return dryRunResult('linkedin_accept_invitation', {
+        profileId,
+        matchedInvitation:
+          pending.find((i) => profileSlug(i.profileUrl ?? i.profileId ?? '') === profileId) ?? null,
+      });
+    }
     const result = await driver.connections.acceptConnectionRequest(profileId);
     return jsonResult(result);
   },
 
   linkedin_withdraw_invitation: async (args) => {
-    const driver = await withAuthedDriver();
     const profileId = profileSlug(requireString(args, 'profileId'));
+    if (isDryRun(args)) {
+      return dryRunResult('linkedin_withdraw_invitation', { profileId });
+    }
+    const driver = await withAuthedDriver();
     const result = await driver.connections.withdrawConnectionRequest(profileId);
     return jsonResult(result);
   },
 
   // --- Feed engagement ----------------------------------------------------
   linkedin_react: async (args) => {
-    const driver = await withAuthedDriver();
     const postUrl = requireString(args, 'postUrl');
     const reaction = optionalEnum(args, 'reaction', REACTION_TYPES) ?? 'like';
+    // The preview echoes the resolved payload, so it needs nothing from the
+    // browser — answer before launching Chrome.
+    if (isDryRun(args)) {
+      return dryRunResult('linkedin_react', { postUrl, reaction });
+    }
+    const driver = await withAuthedDriver();
     const result = await driver.feed.reactToPost(postUrl, reaction);
     return jsonResult(result);
   },
 
   linkedin_comment: async (args) => {
-    const driver = await withAuthedDriver();
     const postUrl = requireString(args, 'postUrl');
     const text = requireString(args, 'text');
+    if (isDryRun(args)) {
+      return dryRunResult('linkedin_comment', { postUrl, comment: text });
+    }
+    const driver = await withAuthedDriver();
     const result = await driver.feed.commentOnPost(postUrl, text);
     return jsonResult(result);
   },
@@ -948,16 +1065,27 @@ export async function dispatchToolCall(
     if (!handler) {
       throw new McpToolError(`Unknown tool: "${name}".`);
     }
+    const args = asArgs(rawArgs);
     // Deny-by-default gate for account-modifying actions. Runs BEFORE the handler
     // so a denied write never even launches the browser.
-    if (isMutatingTool(name) && !mutationAllowed(name, process.env.LINKEDIN_ALLOW_MUTATIONS)) {
+    //
+    // A dry run is exempt: it resolves the target and returns the payload without
+    // performing anything, so it is a read. Gating it would make previewing
+    // impossible in exactly the configuration where a preview matters most —
+    // mutations still off, deciding whether to turn them on. Every dryRun branch
+    // returns before its write call, so nothing here can reach a mutation.
+    if (
+      isMutatingTool(name) &&
+      !isDryRun(args) &&
+      !mutationAllowed(name, process.env.LINKEDIN_ALLOW_MUTATIONS)
+    ) {
       throw new McpToolError(
         `"${name}" takes an action on your LinkedIn account and is disabled by default. ` +
           'Enable write actions by setting LINKEDIN_ALLOW_MUTATIONS ' +
           '(e.g. LINKEDIN_ALLOW_MUTATIONS=send_message,react), or "all" to allow every write action.',
+        'mutations_disabled',
       );
     }
-    const args = asArgs(rawArgs);
     return await handler(args);
   } catch (err) {
     const message =
@@ -968,7 +1096,7 @@ export async function dispatchToolCall(
         {
           type: 'text',
           text: JSON.stringify(
-            { error: message, tool: name },
+            { error: message, tool: name, ...errorCodeFields(err) },
             null,
             2,
           ),
@@ -976,4 +1104,33 @@ export async function dispatchToolCall(
       ],
     };
   }
+}
+
+/** What a caller should do about a given error code, in one clause. */
+const RECOVERY: Record<string, string> = {
+  needs_login: 'call linkedin_login and retry once the browser shows you signed in',
+  needs_verification: 'solve the challenge in the open Chrome window, then retry the same call',
+  quota_exceeded: 'wait for the daily cap to reset (linkedin_get_quota reports resetsAt); retrying now will fail identically',
+  action_failed: 'the page did not match what the driver expected — retry once, then report it if it persists',
+  mutations_disabled: 'set LINKEDIN_ALLOW_MUTATIONS to enable this write action',
+};
+
+/**
+ * Project a thrown error's stable `code` into the MCP error envelope.
+ *
+ * The driver has carried typed codes since the Electron days
+ * (`NeedsLoginError`, `CheckpointError`, `QuotaError`, `ActionError`), but the
+ * MCP layer flattened every one of them to an English sentence — so an agent had
+ * to string-match prose to tell "solve the captcha and retry" from "wait until
+ * midnight" from "the selector broke". Only a known code is echoed, so an
+ * unrelated library that happens to expose a `.code` cannot inject a value the
+ * caller would read as one of ours.
+ */
+function errorCodeFields(err: unknown): { code?: string; recovery?: string } {
+  if (!(err instanceof Error)) return {};
+  const code = (err as Error & { code?: unknown }).code;
+  if (typeof code !== 'string') return {};
+  const recovery = RECOVERY[code];
+  if (recovery === undefined) return {};
+  return { code, recovery };
 }

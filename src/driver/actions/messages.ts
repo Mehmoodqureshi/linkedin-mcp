@@ -168,7 +168,7 @@ export class MessagingActions {
   // -------------------------------------------------------------------------
 
   /** Lists recent inbox threads with participant + last-message snippet. */
-  async getConversations(): Promise<ConversationSummary[]> {
+  async getConversations(limit = 30): Promise<ConversationSummary[]> {
     await navigate(this.page, `${LINKEDIN_BASE}/messaging/`);
     assertAuthenticated(this.page);
     await rateLimitDelay();
@@ -177,7 +177,7 @@ export class MessagingActions {
     // Conversation rows use obfuscated classes; anchor on the thread link, take
     // its enclosing <li>, and parse the visible text lines:
     //   ["Status is reachable"?, "<Name>", "<date>", "<preview>", <noise...>]
-    const rows = await this.page.evaluate(() => {
+    const rows = await this.page.evaluate((max: number) => {
       const norm = (s: string | null | undefined): string =>
         (s ?? '').replace(/\s+/g, ' ').trim();
       const root: HTMLElement = document.querySelector('main') ?? document.body;
@@ -203,7 +203,7 @@ export class MessagingActions {
         items = collected;
       }
       const out: Array<{ href: string; lines: string[] }> = [];
-      for (const li of items.slice(0, 30)) {
+      for (const li of items.slice(0, max)) {
         const a = li.querySelector('a[href*="/messaging/thread/"]');
         const seen = new Set<string>();
         const lines = ((li as HTMLElement).innerText ?? '')
@@ -217,7 +217,7 @@ export class MessagingActions {
         if (lines.length) out.push({ href: a?.getAttribute('href') ?? '', lines });
       }
       return out;
-    });
+    }, limit);
 
     const NOISE_RE =
       /^status is|^\.\s|press return|active conversation|^open the options|^new message$|sponsored/i;

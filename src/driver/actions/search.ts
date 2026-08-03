@@ -25,6 +25,19 @@ import {
 
 export type ConnectionDegree = '1st' | '2nd' | '3rd';
 
+/**
+ * Result count when the caller doesn't ask for one — one LinkedIn search page.
+ *
+ * This used to be hardcoded at every call site, so a caller who wanted five
+ * results paid for twenty-five and a caller who wanted forty could not reach
+ * them, even though every other read tool (`get_feed`, `get_notifications`,
+ * `get_member_posts`) already took a `limit`.
+ */
+export const DEFAULT_RESULT_LIMIT = 25;
+
+/** Upper bound on a caller-supplied limit — beyond this, scrolling gets slow and conspicuous. */
+export const MAX_RESULT_LIMIT = 100;
+
 /** A filter value that may arrive as a single string or an array of strings. */
 type OneOrMany<T extends string = string> = T | T[];
 
@@ -362,7 +375,7 @@ export class SearchActions {
   // People
   // -------------------------------------------------------------------------
 
-  async searchPeople(query: string, filters?: PeopleFilters): Promise<SearchResult[]> {
+  async searchPeople(query: string, filters?: PeopleFilters, limit = DEFAULT_RESULT_LIMIT): Promise<SearchResult[]> {
     const params = new URLSearchParams();
     params.set('origin', 'GLOBAL_SEARCH_HEADER');
 
@@ -409,7 +422,7 @@ export class SearchActions {
     assertAuthenticated(this.page);
     await rateLimitDelay();
 
-    const cards = await this.collectByHref('/in/', 25);
+    const cards = await this.collectByHref('/in/', limit);
     const out: SearchResult[] = [];
     for (const { href, lines } of cards) {
       const r = this.parsePerson(href, lines);
@@ -422,7 +435,7 @@ export class SearchActions {
   // Jobs
   // -------------------------------------------------------------------------
 
-  async searchJobs(query: string, filters?: JobFilters): Promise<JobResult[]> {
+  async searchJobs(query: string, filters?: JobFilters, limit = DEFAULT_RESULT_LIMIT): Promise<JobResult[]> {
     const params = new URLSearchParams();
     params.set('keywords', query);
     if (filters?.location) params.set('location', filters.location);
@@ -494,7 +507,7 @@ export class SearchActions {
     assertAuthenticated(this.page);
     await rateLimitDelay();
 
-    const cards = await this.collectByHref('/jobs/view/', 25);
+    const cards = await this.collectByHref('/jobs/view/', limit);
     const out: JobResult[] = [];
     for (const { href, lines } of cards) {
       const r = this.parseJob(href, lines);
@@ -507,7 +520,7 @@ export class SearchActions {
   // Companies
   // -------------------------------------------------------------------------
 
-  async searchCompanies(query: string, filters?: CompanyFilters): Promise<CompanyResult[]> {
+  async searchCompanies(query: string, filters?: CompanyFilters, limit = DEFAULT_RESULT_LIMIT): Promise<CompanyResult[]> {
     // NOTE: LinkedIn's company-search route ignores URL geo facets (both geoUrn
     // and companyHqGeo were verified no-ops), so locations are enforced by
     // post-filtering each result card's `location` line (see locationMatches) —
@@ -549,7 +562,7 @@ export class SearchActions {
       await rateLimitDelay();
       // Pull a larger pool when a location filter is active, since post-filtering
       // discards non-matching cards; otherwise the usual page of 25.
-      const cards = await this.collectByHref('/company/', locations.length ? 50 : 25);
+      const cards = await this.collectByHref('/company/', locations.length ? limit * 2 : limit);
       const out: CompanyResult[] = [];
       for (const { href, lines } of cards) {
         const r = this.parseCompany(href, lines);

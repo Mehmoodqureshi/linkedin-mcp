@@ -20,7 +20,8 @@
  */
 
 import net from 'node:net';
-import { existsSync, unlinkSync } from 'node:fs';
+import { existsSync, readFileSync, unlinkSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -32,7 +33,26 @@ import { registerTools } from './tools';
 // ---------------------------------------------------------------------------
 
 const SERVER_NAME = 'linkedin-driver';
-const SERVER_VERSION = '1.0.0';
+
+/**
+ * The version advertised in the MCP handshake, read from the shipped
+ * package.json rather than hardcoded.
+ *
+ * It used to be a literal `'1.0.0'`, so every MCP client — and every bug report
+ * written from what a client displayed — named a version this package has never
+ * published. Read once at module load; falls back to `'0.0.0'` only if the file
+ * is unreadable, which is a clearer signal than a plausible-looking lie.
+ */
+export const SERVER_VERSION = ((): string => {
+  try {
+    const pkg = JSON.parse(readFileSync(join(__dirname, '..', '..', 'package.json'), 'utf8')) as {
+      version?: string;
+    };
+    return pkg.version ?? '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+})();
 
 // ---------------------------------------------------------------------------
 // Module state
