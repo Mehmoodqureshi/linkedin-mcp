@@ -27,6 +27,7 @@ import { SearchActions } from './actions/search';
 import { MessagingActions } from './actions/messages';
 import { ConnectionActions } from './actions/connections';
 import { FeedActions } from './actions/feed';
+import { ApplyActions } from './actions/apply';
 
 import type { Page } from 'playwright-core';
 import type { DriverState, DriverStatus } from './types';
@@ -107,6 +108,7 @@ export class LinkedInDriver {
   public messages!: MessagingActions;
   public connections!: ConnectionActions;
   public feed!: FeedActions;
+  public apply!: ApplyActions;
 
   /** Current lifecycle state. */
   public status: DriverState = 'idle';
@@ -205,6 +207,7 @@ export class LinkedInDriver {
     this.messages = new MessagingActions(page);
     this.connections = new ConnectionActions(page);
     this.feed = new FeedActions(page);
+    this.apply = new ApplyActions(page);
   }
 
   /**

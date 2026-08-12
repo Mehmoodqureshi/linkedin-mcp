@@ -43,6 +43,9 @@ export type { SendMessageResult, ConversationSummary, ChatMessage } from './mess
 export { ConnectionActions, MAX_NOTE_LENGTH } from './connections';
 export type { ConnectionRequestResult, PendingRequest } from './connections';
 
+export { ApplyActions, normalizeJobUrl, answerKey } from './apply';
+export type { ApplyResult, ApplyOptions, ApplicationQuestion, QuestionKind } from './apply';
+
 export { FeedActions } from './feed';
 export type {
   FeedPost,

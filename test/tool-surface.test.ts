@@ -15,7 +15,9 @@ import type { ZodTypeAny } from 'zod';
 
 import { dispatchToolCall, TOOL_DEFINITIONS } from '../src/mcp/tools';
 import { SERVER_VERSION } from '../src/mcp/server';
+import { isMutatingTool, mutationAllowed } from '../src/mcp/mutation-gate';
 import { DEFAULT_RESULT_LIMIT, MAX_RESULT_LIMIT } from '../src/driver/actions/search';
+import { answerKey, normalizeJobUrl } from '../src/driver/actions/apply';
 
 function definition(name: string): (typeof TOOL_DEFINITIONS)[number] {
   const def = TOOL_DEFINITIONS.find((d) => d.name === name);
@@ -149,6 +151,55 @@ test('the same call without dryRun is still refused while mutations are off', as
     if (previous === undefined) delete process.env.LINKEDIN_ALLOW_MUTATIONS;
     else process.env.LINKEDIN_ALLOW_MUTATIONS = previous;
   }
+});
+
+// --- linkedin_apply ---------------------------------------------------------
+
+test('linkedin_apply is advertised, gated as a write, and takes answers + dryRun', () => {
+  const def = definition('linkedin_apply');
+  assert.match(def.description, /dryRun/);
+  assert.match(def.description, /NEVER guesses/i);
+  assert.ok(isMutatingTool('linkedin_apply'), 'apply must be behind the mutation gate');
+  assert.equal(mutationAllowed('linkedin_apply', undefined), false, 'must be denied by default');
+  assert.equal(mutationAllowed('linkedin_apply', 'apply'), true);
+
+  assert.equal(field('linkedin_apply', 'jobUrl').safeParse('4444995257').success, true);
+  assert.equal(field('linkedin_apply', 'dryRun').safeParse(true).success, true);
+  const answers = field('linkedin_apply', 'answers');
+  assert.equal(answers.safeParse({ 'Years of experience': '6' }).success, true);
+  assert.equal(answers.safeParse({ 'Years of experience': 6 }).success, false, 'answers must be strings');
+  assert.equal(answers.safeParse(undefined).success, true);
+});
+
+test('an apply without dryRun is refused while mutations are off', async () => {
+  const previous = process.env.LINKEDIN_ALLOW_MUTATIONS;
+  delete process.env.LINKEDIN_ALLOW_MUTATIONS;
+  try {
+    const r = await dispatchToolCall('linkedin_apply', { jobUrl: '4444995257' });
+    assert.equal(r.isError, true);
+    assert.equal(errorPayload(r).code, 'mutations_disabled');
+  } finally {
+    if (previous === undefined) delete process.env.LINKEDIN_ALLOW_MUTATIONS;
+    else process.env.LINKEDIN_ALLOW_MUTATIONS = previous;
+  }
+});
+
+test('normalizeJobUrl accepts an id, a job URL, and a search URL', () => {
+  const expected = 'https://www.linkedin.com/jobs/view/4444995257';
+  assert.equal(normalizeJobUrl('4444995257'), expected);
+  assert.equal(normalizeJobUrl('https://www.linkedin.com/jobs/view/4444995257'), expected);
+  assert.equal(normalizeJobUrl('https://www.linkedin.com/jobs/view/4444995257/?refId=abc'), expected);
+  assert.equal(normalizeJobUrl('https://www.linkedin.com/jobs/search/?currentJobId=4444995257&f_WT=2'), expected);
+  assert.throws(() => normalizeJobUrl('https://example.com/careers'), /does not name a LinkedIn job/);
+});
+
+test('answerKey matching ignores case, spacing, punctuation and the required marker', () => {
+  const canonical = answerKey('Years of experience');
+  assert.equal(answerKey('  years   of  experience  '), canonical);
+  assert.equal(answerKey('Years of experience?'), canonical);
+  assert.equal(answerKey('Years of experience:'), canonical);
+  assert.equal(answerKey('YEARS OF EXPERIENCE'), canonical);
+  assert.notEqual(answerKey('Years of experience with React'), canonical);
 });
 
 // --- limit on the search/inbox reads ---------------------------------------

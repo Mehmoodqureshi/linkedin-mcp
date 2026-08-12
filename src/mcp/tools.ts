@@ -432,6 +432,40 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
   {
+    name: 'linkedin_apply',
+    description:
+      'Apply to a LinkedIn job via Easy Apply. Walks the multi-step application ' +
+      'modal, reports every screening question it asks, and submits only when all ' +
+      'required questions have answers. NEVER guesses an answer: employer questions ' +
+      'about work authorization, salary, notice period and years of experience are ' +
+      "the applicant's to give, and a wrong one is a misrepresentation on a real " +
+      'application. ALWAYS run with dryRun:true first to see the questions, ask the ' +
+      'USER for their answers, then re-run with those answers supplied. Postings that ' +
+      'hand off to an external system (Workday, Greenhouse, Lever) are reported as ' +
+      "'external' with their link rather than half-completed. This is a WRITE action, " +
+      'gated by LINKEDIN_ALLOW_MUTATIONS and metered by a daily cap.',
+    inputSchema: {
+      jobUrl: z
+        .string()
+        .describe('Job id (e.g. "4444995257") or full /jobs/view/ URL, as returned by linkedin_search_jobs.'),
+      answers: z
+        .record(z.string(), z.string())
+        .describe(
+          'Answers keyed by the question label exactly as returned by a dryRun (matching ignores case, ' +
+            'trailing punctuation and the required-marker asterisk). For a select or radio question, pass ' +
+            'one of its listed options verbatim.',
+        )
+        .optional(),
+      dryRun: z
+        .boolean()
+        .describe(
+          'Walk the application and return every question it asks WITHOUT submitting anything and without ' +
+            'counting against the daily cap. Run this first, always.',
+        )
+        .optional(),
+    },
+  },
+  {
     name: 'linkedin_get_member_posts',
     description:
       'List a member’s recent posts (newest first) with their canonical ' +
@@ -962,6 +996,18 @@ export const TOOL_HANDLERS: Record<string, ToolHandler> = {
     }
     const driver = await withAuthedDriver();
     const result = await driver.feed.commentOnPost(postUrl, text);
+    return jsonResult(result);
+  },
+
+  // --- Job applications ---------------------------------------------------
+  linkedin_apply: async (args) => {
+    const jobUrl = requireString(args, 'jobUrl');
+    const answers = (optionalObject(args, 'answers') ?? {}) as Record<string, string>;
+    const driver = await withAuthedDriver();
+    const result = await driver.apply.applyToJob(jobUrl, {
+      dryRun: isDryRun(args),
+      answers,
+    });
     return jsonResult(result);
   },
 
