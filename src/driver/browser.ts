@@ -107,6 +107,75 @@ function isChromiumProcess(pid: number): boolean {
   }
 }
 
+/**
+ * PIDs of Chromium processes whose command line references `profileDir`
+ * (i.e. they were launched with `--user-data-dir=<profileDir>`). This is the
+ * Windows-safe complement to inspectProfileLock(): on Windows Chromium does not
+ * write the Unix `<host>-<pid>` SingletonLock symlink, so a LIVE orphan holding
+ * a dedicated profile is invisible to inspectProfileLock() and the driver would
+ * otherwise fail to reclaim it (symptom: "Opening in existing browser session"
+ * recurs and needs a manual kill). We match ONLY the given dedicated profile
+ * dir, so the user's normal Chrome (a different user-data-dir) is never matched.
+ */
+function findProfileHolderPids(profileDir: string): number[] {
+  try {
+    if (process.platform === 'win32') {
+      // PowerShell is a real .exe (no shell needed via execFileSync); CIM
+      // exposes each process's full command line, which tasklist does not.
+      const escaped = profileDir.replace(/'/g, "''");
+      const out = execFileSync(
+        'powershell',
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          `Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" | ` +
+            `Where-Object { $_.CommandLine -like '*${escaped}*' } | ` +
+            `ForEach-Object { $_.ProcessId }`,
+        ],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
+      );
+      return out
+        .split(/\r?\n/)
+        .map((s) => Number.parseInt(s.trim(), 10))
+        .filter((n) => Number.isInteger(n) && n > 0 && n !== process.pid);
+    }
+    // macOS/Linux: ps lists pid + full command; match our profile dir.
+    const out = execFileSync('ps', ['-ax', '-o', 'pid=,command='], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const pids: number[] = [];
+    for (const line of out.split(/\r?\n/)) {
+      if (line.includes(profileDir)) {
+        const pid = Number.parseInt(line.trim().split(/\s+/)[0]!, 10);
+        if (Number.isInteger(pid) && pid > 0 && pid !== process.pid) pids.push(pid);
+      }
+    }
+    return pids;
+  } catch {
+    return []; // enumeration failed — fall back to file-based lock clearing.
+  }
+}
+
+/**
+ * Terminate any Chromium processes still holding `profileDir` (see
+ * findProfileHolderPids). Returns the number killed. Safe because the caller
+ * only invokes it for its OWN dedicated profile after a genuine lock error.
+ */
+function killProfileHolders(profileDir: string): number {
+  let killed = 0;
+  for (const pid of findProfileHolderPids(profileDir)) {
+    try {
+      process.kill(pid, 'SIGKILL');
+      killed++;
+    } catch {
+      /* already gone between scan and kill */
+    }
+  }
+  return killed;
+}
+
 /** The options object accepted by `chromium.launchPersistentContext`. */
 type PersistentContextOptions = Parameters<typeof chromium.launchPersistentContext>[1];
 
@@ -366,6 +435,22 @@ export class BrowserManager extends EventEmitter {
             `the profile lock is held by pid ${owner.pid}, which is not our Chromium. ` +
               `Set a different LINKEDIN_MCP_USERDATA, or clear the lock manually.`,
           );
+        }
+      }
+
+      // Windows (and any case inspectProfileLock cannot identify the owner):
+      // Chromium here does not write the Unix `<host>-<pid>` SingletonLock
+      // symlink, so a LIVE orphan still holding OUR dedicated profile is
+      // invisible to inspectProfileLock() above. Scan for processes whose
+      // command line references this user-data-dir and terminate them. We only
+      // match our own dedicated profile, so the user's normal Chrome is safe.
+      if (!owner.alive) {
+        const killed = killProfileHolders(this.launchDir);
+        if (killed > 0) {
+          process.stderr.write(
+            `[browser] terminated ${killed} orphaned Chromium process(es) holding the profile.\n`,
+          );
+          await new Promise((resolve) => setTimeout(resolve, 500));
         }
       }
 
